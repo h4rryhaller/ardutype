@@ -1,0 +1,3 @@
+# Entorno y cachés de Python de la herramienta
+herramienta/.venv/
+__pycache__/

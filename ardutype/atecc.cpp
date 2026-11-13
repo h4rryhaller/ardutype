@@ -91,7 +91,6 @@ static void despertar() {
   digitalWrite(PIN_SDA, LOW);
   delayMicroseconds(100);
   Wire.begin(PIN_SDA, PIN_SCL);  // devuelve los pines al I2C
-  Wire.setClock(100000);
 #endif
   delayMicroseconds(1500);
   despierto = millis() | 1;
@@ -234,8 +233,26 @@ static uint32_t redondearLimite(uint32_t contador, uint32_t minimo) {
 
 // ---- Interfaz ----
 
+// El chip va solo en su bus: en el del OLED, el tráfico de la pantalla lo
+// despertaba. Necesita pull-ups de 4,7 kΩ a 3V3 en SDA y SCL (las internas no
+// bastan: el chip dejaba de contestar).
+static void iniciarBus() {
+  static bool iniciado = false;
+  if (iniciado) return;
+  iniciado = true;
+#if defined(ARDUINO_ARCH_RP2040)
+  Wire.setSDA(PIN_SDA);
+  Wire.setSCL(PIN_SCL);
+  Wire.begin();
+#else
+  Wire.begin(PIN_SDA, PIN_SCL);
+#endif
+  Wire.setClock(100000);
+}
+
 EstadoAtecc ateccIniciar() {
   uint8_t cfg[128];
+  iniciarBus();
   sesion(true);
   if (!leerConfig(cfg)) {
     dormir();

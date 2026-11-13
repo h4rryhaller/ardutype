@@ -6,8 +6,9 @@
 //
 // Placa: "Adafruit KB2040" o una ESP8266 (banco de pruebas aparte; pines en
 // config.h: D2 = SDA, D1 = SCL en NodeMCU y Wemos D1 mini). atecc.h/.cpp son
-// copia de los del firmware. En la ESP8266 el ATECC va igual (4 GND, 5 SDA,
-// 6 SCL, 8 a 3V3) y, sin OLED en el bus, con pull-ups de 4,7 kΩ de SDA y SCL a 3V3.
+// copia de los del firmware, que inician el bus a 100 kHz. En la ESP8266 el
+// ATECC va igual (4 GND, 5 SDA, 6 SCL, 8 a 3V3), con pull-ups de 4,7 kΩ de
+// SDA y SCL a 3V3.
 // Monitor serie a 115200, con fin de línea. Órdenes (una letra + Intro):
 //   e  estado: contador, límite e intentos que quedan
 //   B  provisionar y bloquear (pide escribir BLOQUEAR)
@@ -174,14 +175,6 @@ static void aleatorio() {
 
 void setup() {
   Serial.begin(115200);
-#if defined(ARDUINO_ARCH_RP2040)
-  Wire.setSDA(PIN_SDA);
-  Wire.setSCL(PIN_SCL);
-  Wire.begin();
-#else
-  Wire.begin(PIN_SDA, PIN_SCL);
-#endif
-  Wire.setClock(400000);
   while (!Serial) delay(10);
   delay(200);
   Serial.println("\n==== ATECC608B: prueba con bloqueo (e B i g s f x a) ====");

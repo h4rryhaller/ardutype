@@ -4,13 +4,16 @@
 // protocolo del chip (despertar, paquetes con CRC-16, sondeo mientras trabaja)
 // va aquí mismo, que es lo que luego pasará al firmware.
 //
-// Conexión: en el mismo bus I2C que el OLED (TX = SDA, RX = SCL), a 3V3 y GND.
-// El chip suelto en SOIC-8: patilla 4 GND, 5 SDA, 6 SCL, 8 VCC (el resto sin
-// conectar) y un condensador de 100 nF entre VCC y GND. Las resistencias de
-// pull-up del módulo OLED valen para los dos.
+// Conexión: TX = SDA, RX = SCL, a 3V3 y GND, con pull-ups de 4,7 kΩ de TX y
+// RX a 3V3 (el OLED va en otro bus, A0/A1). El chip suelto en SOIC-8:
+// patilla 4 GND, 5 SDA, 6 SCL, 8 VCC (el resto sin conectar) y un
+// condensador entre VCC y GND.
 //
 // Monitor serie a 115200. La prueba se lanza al abrir el monitor y otra vez
-// con cada línea que se envíe. Hace:
+// con cada línea que se envíe. Con la línea «c» empieza el modo continuo:
+// despierta el chip, le pide INFO y un SHA-256 y lo duerme, diez veces por
+// segundo, y cada segundo dice cuántas han fallado. Sirve para mover los
+// cables y ver en qué momento falla. Otra línea lo para. La prueba normal hace:
 //   1. Despertar el chip y buscarlo en el bus (dormido no contesta)
 //   2. INFO: revisión del silicio (608A = 0x6002, 608B = 0x6003)
 //   3. Leer la zona de configuración: número de serie, dirección, bloqueos,
@@ -39,6 +42,8 @@ enum : uint8_t { OP_LEER = 0x02, OP_ALEATORIO = 0x1B, OP_INFO = 0x30, OP_SHA = 0
 const uint32_t SONDEO_MAX_MS = 300;  // la orden más lenta del 608 tarda ~250 ms (SelfTest)
 
 static uint8_t direccion = 0;
+static bool callado = false;  // en el modo continuo, los fallos solo se cuentan
+static bool continuo = false;
 
 // ---- Protocolo ----
 
@@ -82,12 +87,12 @@ static bool leerRespuesta(uint8_t *resp, size_t n, uint32_t esperaMs) {
     if (Wire.requestFrom(direccion, n) == n) {
       for (size_t i = 0; i < n; i++) resp[i] = Wire.read();
       if (resp[0] != n) {
-        Serial.printf("  respuesta de %u bytes, se esperaban %u (estado 0x%02X)\n", resp[0], n, resp[1]);
+        if (!callado) Serial.printf("  respuesta de %u bytes, se esperaban %u (estado 0x%02X)\n", resp[0], n, resp[1]);
         return false;
       }
       uint16_t crc = crc16(resp, n - 2);
       if (resp[n - 2] != (crc & 0xFF) || resp[n - 1] != (crc >> 8)) {
-        Serial.println("  CRC de la respuesta incorrecto");
+        if (!callado) Serial.println("  CRC de la respuesta incorrecto");
         return false;
       }
       return true;
@@ -95,7 +100,7 @@ static bool leerRespuesta(uint8_t *resp, size_t n, uint32_t esperaMs) {
     while (Wire.available()) Wire.read();
     delay(1);
   }
-  Serial.println("  el chip no contesta");
+  if (!callado) Serial.println("  el chip no contesta");
   return false;
 }
 
@@ -119,7 +124,7 @@ static bool orden(uint8_t op, uint8_t p1, uint16_t p2, const uint8_t *datos, siz
   Wire.write(PALABRA_ORDEN);
   Wire.write(paquete, n);
   if (Wire.endTransmission() != 0) {
-    Serial.println("  no acepta la orden");
+    if (!callado) Serial.println("  no acepta la orden");
     return false;
   }
 
@@ -234,7 +239,6 @@ static void probarAleatorio() {
 
 static void prueba() {
   Serial.println("\n==== Prueba del ATECC608 ====");
-  Wire.setClock(400000);
   if (!buscarChip()) {
     Serial.println("No encuentro el ATECC. Revisa VCC/GND/SDA/SCL y los pull-ups.");
     return;
@@ -249,11 +253,33 @@ static void prueba() {
   Serial.println("Hecho. Envía cualquier línea para repetir.");
 }
 
+// Una ronda del modo continuo: despertar, INFO, SHA-256 de "abc" y dormir
+static bool ronda() {
+  static const uint8_t ESPERADO_INICIO[4] = {0xBA, 0x78, 0x16, 0xBF};
+  uint8_t rev[4], hash[32];
+  despertar();
+  bool ok = orden(OP_INFO, 0x00, 0, nullptr, 0, rev, 4) && orden(OP_SHA, 0x00, 0, nullptr, 0, nullptr, 0) &&
+            orden(OP_SHA, 0x02, 3, (const uint8_t *)"abc", 3, hash, 32) && !memcmp(hash, ESPERADO_INICIO, 4);
+  enviarPalabra(PALABRA_DORMIR);
+  return ok;
+}
+
+static void rondasDeUnSegundo() {
+  int fallos = 0;
+  for (int i = 0; i < 10; i++) {
+    if (!ronda()) fallos++;
+    delay(100);
+  }
+  if (fallos) Serial.printf("FALLAN %d de 10   <-----\n", fallos);
+  else Serial.println("bien 10 de 10");
+}
+
 void setup() {
   Serial.begin(115200);
   Wire.setSDA(PIN_SDA);
   Wire.setSCL(PIN_SCL);
   Wire.begin();
+  Wire.setClock(100000);  // como en el firmware
   while (!Serial) delay(10);
   delay(200);
   prueba();
@@ -261,7 +287,20 @@ void setup() {
 
 void loop() {
   if (Serial.available()) {
+    char c = Serial.read();
+    delay(10);
     while (Serial.available()) Serial.read();
-    prueba();
+    if (continuo) {
+      continuo = callado = false;
+      Serial.println("Modo continuo parado.");
+    } else if (c == 'c') {
+      if (!buscarChip()) Serial.println("Aviso: el chip no contesta en ninguna dirección conocida; se usa 0x60.");
+      if (!direccion) direccion = 0x60;
+      continuo = callado = true;
+      Serial.println("Modo continuo: mueve los cables y mira cuándo falla. Otra línea para.");
+    } else {
+      prueba();
+    }
   }
+  if (continuo) rondasDeUnSegundo();
 }

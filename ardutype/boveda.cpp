@@ -94,6 +94,11 @@ static void kekDePin(const Ranura &r, const char *pin, uint8_t kek[TAM_CLAVE]) {
 
 // ---- ATECC608 ----
 
+static const char *nombreChip(EstadoAtecc e) {
+  static const char *const NOMBRES[] = {"no está", "virgen", "a medias", "listo", "con otra configuración"};
+  return NOMBRES[e];
+}
+
 static bool chipListo() {
   return ateccEstado() == ATECC_LISTO;
 }
@@ -176,14 +181,25 @@ static bool chipUsable() {
 
 // Gasta un intento del chip: KEK = HKDF(MAC del chip sobre el PBKDF2 del PIN)
 static ResultadoApertura kekDePinChip(const Ranura &r, const char *pin, uint8_t kek[TAM_CLAVE]) {
-  if (!chipListo() || !chipEsElNuestro()) return APERTURA_SIN_CHIP;
+  // Si no contestó al arrancar, otra oportunidad
+  if (ateccEstado() == ATECC_AUSENTE) ateccIniciar();
+  if (!chipListo()) {
+    Serial.printf("Chip ATECC608: %s (último estado 0x%02X)\n", nombreChip(ateccEstado()), ateccUltimoEstado());
+    return APERTURA_SIN_CHIP;
+  }
+  if (!chipEsElNuestro()) {
+    Serial.println("Chip ATECC608: es otro chip (no coincide el número de serie de /chip.bin)");
+    return APERTURA_SIN_CHIP;
+  }
   uint8_t reto[TAM_CLAVE], mac[TAM_ATECC];
   kekDePin(r, pin, reto);
   bool ok = ateccIntento(reto, mac);
   criptoBorrar(reto, sizeof(reto));
   if (!ok) {
+    uint8_t e = ateccUltimoEstado();
     uint32_t contador, limite;
     if (ateccContador(contador, limite) && contador >= limite) return APERTURA_SIN_INTENTOS;
+    Serial.printf("Chip ATECC608: falla el MAC (estado 0x%02X)\n", e);
     return APERTURA_SIN_CHIP;
   }
   criptoHkdf(mac, sizeof(mac), r.sal, sizeof(r.sal), INFO_PIN_CHIP, kek);
@@ -331,8 +347,7 @@ static ResultadoApertura abrirCuerpo() {
 
 EstadoBoveda bovedaIniciar() {
   cabecera.ajustes = AJUSTES_INICIALES;
-  static const char *const NOMBRES[] = {"no está", "virgen", "a medias", "listo", "con otra configuración"};
-  Serial.printf("Chip ATECC608: %s\n", NOMBRES[ateccIniciar()]);
+  Serial.printf("Chip ATECC608: %s\n", nombreChip(ateccIniciar()));
   if (!LittleFS.begin()) return estado = BOVEDA_SIN_FS;
   size_t largo;
   if (!LittleFS.exists(FICHERO)) return estado = BOVEDA_NUEVA;

@@ -527,6 +527,8 @@ class RuedaPalabras : public Pantalla {
         if (largoPre < MAX_PRE) {
           pre[largoPre++] = 'a'; pre[largoPre] = '\0';
           ajustarAValida(1);   // primera letra que dé palabra
+          int p;
+          if (!coincidencias(p)) pre[--largoPre] = '\0';  // ninguna palabra sigue: no se añade
           sucio = true;
         }
         break;
@@ -1669,4 +1671,5 @@ void uiTick() {
     else cima()->dibujar();
     oled.sendBuffer();
   }
+  if (pantallaRevisarBus()) sucio = true;
 }

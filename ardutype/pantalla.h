@@ -7,7 +7,12 @@
 //   y 0-6    cabecera (fuente de 5 x 7) y una raya en y = 7
 //   y 9-19   fila 0 (fuente de 6 x 10, 20 caracteres)
 //   y 21-31  fila 1
-extern U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C oled;
+// U8g2 con un envío por I2C propio que apunta los errores del bus
+class Oled : public U8G2 {
+ public:
+  Oled();
+};
+extern Oled oled;
 
 extern const uint8_t *const FUENTE_PEQUENA;
 extern const uint8_t *const FUENTE_NORMAL;
@@ -23,5 +28,9 @@ void pantallaContraste(uint8_t contraste);
 void pantallaCabecera(const char *izquierda, const char *derecha = nullptr);
 void pantallaFila(int fila, const char *texto, bool seleccionada);
 void pantallaCentrado(int base, const char *texto);  // con la fuente que esté puesta
+
+// Tras cada refresco: si el bus I2C ha fallado, lo cuenta por el serie, lo
+// libera y reinicia el OLED. Devuelve true si ha hecho falta (hay que repintar).
+bool pantallaRevisarBus();
 
 #endif

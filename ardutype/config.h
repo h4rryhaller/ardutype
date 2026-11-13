@@ -4,9 +4,15 @@
 #include <Arduino.h>
 
 // ---- Pines (KB2040) ----
-// I2C0 en TX/RX: GPIO12/13 solo salen por el STEMMA QT
+// Dos buses I2C. Compartiendo uno, el tráfico del OLED despertaba al ATECC608
+// y los envíos a la pantalla se quedaban colgados (2026-11-12).
+// I2C0 en TX/RX, solo el ATECC608 (pull-ups de 4,7 kΩ a 3V3, a 100 kHz):
 const uint8_t PIN_SDA = 0;  // TX
 const uint8_t PIN_SCL = 1;  // RX
+// I2C1 en A0/A1, el OLED (su módulo lleva las pull-ups):
+#define BUS_OLED Wire1
+const uint8_t PIN_SDA_OLED = 26;  // A0
+const uint8_t PIN_SCL_OLED = 27;  // A1
 
 // Joystick: común a GND, INPUT_PULLUP. Mapeado con el polímetro.
 const uint8_t PIN_ARRIBA = 2;

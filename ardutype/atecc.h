@@ -1,9 +1,9 @@
-#ifndef ATECC_H
+#ifndef ATECC_H   
 #define ATECC_H
 
 #include <Arduino.h>
 
-// ATECC608B en el bus I2C del OLED: el propio chip limita los intentos del PIN,
+// ATECC608B solo en su bus I2C (Wire en PIN_SDA/PIN_SCL): el propio chip limita los intentos del PIN,
 // así que reflashear la placa o copiar la flash no da intentos ilimitados.
 //
 // Ranuras que usamos (las demás se quedan como vienen de fábrica, sin uso):
@@ -28,7 +28,7 @@ enum EstadoAtecc : uint8_t {
 
 const size_t TAM_ATECC = 32;
 
-EstadoAtecc ateccIniciar();  // con Wire ya iniciado
+EstadoAtecc ateccIniciar();  // inicia el bus la primera vez
 EstadoAtecc ateccEstado();
 const uint8_t *ateccSerie();  // 9 bytes, tras ateccIniciar
 

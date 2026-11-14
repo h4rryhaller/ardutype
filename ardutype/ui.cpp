@@ -14,7 +14,7 @@
 #include "boveda.h"
 #include "admin.h"
 #include "ui.h"
-#include "dice_lista.h"   // lista de palabras (castellano): clave de recuperación y PoC de frase
+#include "dice_lista.h"   // lista de palabras (castellano): clave de recuperación
 
 using AlAceptarTexto = std::function<void(const char *)>;
 using Accion = std::function<void()>;
@@ -430,7 +430,7 @@ static Rueda rueda;
 
 // ---- Entrada por palabras (Diceware en castellano) ----
 //
-// Para la clave de recuperación y la PoC de frase. En vez de teclear
+// Para la clave de recuperación. En vez de teclear
 // caracteres arbitrarios, se escriben palabras: con la rueda (solo a-z)
 // tecleas letras y se filtra la lista por prefijo; arriba/abajo saltan las
 // letras sin palabra, así que solo se ven prefijos válidos. La lista
@@ -733,7 +733,7 @@ static Mostrar mostrar;
 class MenuAjustes : public Lista {
  protected:
   void titulo(char *buf, size_t tam) override { snprintf(buf, tam, "Ajustes"); }
-  int numItems() override { return 8; }
+  int numItems() override { return 7; }
 
   void item(int i, char *buf, size_t tam) override {
     Ajustes &a = aj();
@@ -745,7 +745,6 @@ class MenuAjustes : public Lista {
       case 4: snprintf(buf, tam, "LED: %s", a.led ? "sí" : "no"); break;
       case 5: snprintf(buf, tam, "Cambiar PIN"); break;
       case 6: snprintf(buf, tam, "Borrar todo"); break;
-      case 7: snprintf(buf, tam, "PoC frase"); break;
     }
   }
 
@@ -1465,12 +1464,6 @@ void MenuAjustes::elegir(int i) {
         Serial.println("Bóveda borrada");
         bloquear();
         aviso("Todo borrado");
-      });
-      return;
-    case 7:
-      ruedaPalabras.abrir("Diceware", 0, [](const char *frase) {
-        tecladoEscribir(frase);
-        aviso("Frase tecleada");
       });
       return;
   }

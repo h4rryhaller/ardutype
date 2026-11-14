@@ -253,6 +253,7 @@ Detalles prácticos:
      - Probado en el PC: intérprete (teclas, modificadores, `$usuario`/`$contrasena`, casos con error), envío y ejecución de extremo a extremo, y que un guion sobrevive a editar el servicio en el dispositivo.
 6. **Estética:** animaciones y LED de estado.
 7. **PCB final y carcasa.**
+   **Parada (2026-11-14)** hasta validar bien el funcionamiento en el uso diario. Mientras tanto, una placa por debajo con separadores protege las soldaduras y el ATECC.
 8. **Fase 2 de seguridad:** ATECC608.
    **2026-11-12:** llegan los ATECC608B (10 × **ATECC608B-SSHDA-B**: SOIC-8, I2C, genérico sin configurar, dirección 0x60; con 10 se pueden sacrificar unos cuantos en pruebas de bloqueo). Montaje: adaptador SOIC-8 a DIP-8 (paso 1,27 mm); patilla 1 junto al punto; 4 GND, 5 SDA, 6 SCL, 8 VCC (3V3), 1-3 y 7 sin conectar; 100 nF entre 8 y 4. Prueba de concepto en `prueba_atecc/` (solo lectura, sin librerías: despertar, CRC-16, sondeo): busca el chip, INFO (revisión), vuelca la zona de configuración (serie, dirección, bloqueos, SlotConfig/KeyConfig), SHA-256 de "abc" contra el valor conocido y RANDOM. **Resultado:** todo correcto (0x60, revisión 0x6003, configuración de fábrica sin bloquear, SHA bien, RANDOM = patrón fijo).
    **Diseño (2026-11-12):** el límite de intentos lo aplica el chip, porque el firmware se puede reflashear. La hoja de datos completa del 608B es bajo NDA; el mecanismo sale de la nota AN3539 de Microchip y del firmware abierto de Coldcard (608A), y se verifica en un chip de sacrificio.
@@ -273,6 +274,8 @@ Detalles prácticos:
    - **PIN de 6 cifras** (decisión del usuario, 2026-11-12): con como mucho 41 intentos, acertar es un 0,004 % (con 4 cifras, 0,4 %).
    - **Clave de recuperación en palabras** (decisión del usuario, 2026-11-12): **8 palabras** al azar de `dice_lista.h` (1459 palabras, ~84 bits), con el mismo PBKDF2 calibrado (~1 s) que el PIN, ya que no pasa por el chip (ranura `RANURA_PALABRAS`). Se enseña al crear la bóveda en 4 páginas de 2 palabras numeradas (derecha/izquierda pasan página; centro largo confirma desde la última). Se mete con la rueda de palabras de la PoC, generalizada (3 letras + centro por palabra; al completar las 8 se comprueba sola). Las bóvedas anteriores siguen aceptando su clave base32. Descartadas: 12 palabras sin derivación lenta (126 bits) y dejar el base32.
 
+   **Producción (2026-11-14):** patas 5 y 6 del ATECC aisladas; bóveda borrada y creada de cero con el chip puesto. La estética (fase 6) se da por buena de momento. Empieza el uso con contraseñas reales.
+
 ### Posibles mejoras (ideas)
 
 - **Modo «mantener sesión» (keep-alive).** Un modo opcional, en segundo plano, que mientras está activo simule actividad para que el equipo no bloquee la sesión ni apague la pantalla (p. ej. durante una presentación o una lectura larga).
@@ -288,7 +291,7 @@ Detalles prácticos:
   - **Entrada por palabras (mecánica validada en PoC).** Introducir la maestra palabra a palabra: con la rueda (solo a-z) tecleas letras y se filtra la lista por prefijo. Enfoque «deletreo-primero»:
     - **Lista:** castellano, derivada de DW-Espanol-1 (D. Reinhold), filtrada a solo **a-z minúsculas y ≥4 letras**, y reducida a **UNA palabra por prefijo de 3 letras** (la más corta) → **1459 palabras, ~10,5 bits/palabra** (7 ≈ 74 b, 8 ≈ 84 b). Así **3 letras determinan la palabra**. Sin tildes ni ñ (descartadas para poder teclear con la rueda a-z). En `ardutype/dice_lista.h`.
     - **Teclas:** arriba/abajo cambian la última letra **saltando las que no dan palabra** (nunca aparece «ninguna»); derecha añade otra letra; izquierda borra letra o, vacío, la última palabra; centro acepta la palabra mostrada; centro largo entrega la frase.
-    - **PoC:** clase `RuedaPalabras` en `ui.cpp`, accesible en Ajustes → «PoC frase»; teclea la frase por USB para probarla. Cabe de sobra en flash (RP2040, 8 MB). **No reduce la entropía** (sigues eligiendo tus palabras); solo baja los toques frente a teclear ~20 caracteres.
+    - **PoC:** clase `RuedaPalabras` en `ui.cpp`, antes accesible en Ajustes → «PoC frase», que tecleaba la frase por USB; **quitada al pasar a producción (2026-11-14)**, la clase queda solo para la clave de recuperación. Cabe de sobra en flash (RP2040, 8 MB). **No reduce la entropía** (sigues eligiendo tus palabras); solo baja los toques frente a teclear ~20 caracteres.
     - **Alternativa:** 2 palabras por prefijo (2388, 11,2 bits) si se quieren menos palabras, a cambio de un toque para elegir entre 2. Descartada la lista EFF inglesa.
     - **Pendiente (pantalla real):** que la frase alimente la derivación (PBKDF2 → bóveda) en vez de teclearse, con mínimo de palabras / aviso de bits, enganchada al desbloqueo; se verá junto al ATECC608.
 

@@ -1,3 +1,6 @@
 # Entorno y cachés de Python de la herramienta
 herramienta/.venv/
 __pycache__/
+
+# Documentación de terceros (solo en local)
+*.pdf

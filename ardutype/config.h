@@ -21,6 +21,9 @@ const uint8_t PIN_IZQUIERDA = 4;
 const uint8_t PIN_ABAJO = 5;
 const uint8_t PIN_CENTRO = 6;
 
+// Zumbador pasivo (tone) en D8, a GND a través de una resistencia (Ardutype_diseno.md, 3)
+const uint8_t PIN_ZUMBADOR = 8;
+
 // ---- Desbloqueo ----
 // Con el ATECC608 puesto, el chip limita los intentos del PIN (boveda.h).
 // Con 6 cifras y como mucho 41 intentos, acertar es un 0,004 %. Sin el chip,
@@ -46,6 +49,15 @@ const uint32_t MOSTRAR_MS = 15000;           // contraseña visible en el OLED
 const uint32_t APAGAR_PANTALLA_MS = 60000;   // sin tocar nada se apaga el OLED
 const uint32_t AVISO_MS = 1500;
 const uint8_t LARGO_GENERADA = 16;           // contraseñas generadas
+
+// ---- Pomodoro ----
+const uint32_t POMODORO_TRABAJO_MS = 25 * 60000UL;
+const uint32_t POMODORO_DESCANSO_MS = 5 * 60000UL;
+const uint32_t POMODORO_LARGO_MS = 15 * 60000UL;
+const uint8_t POMODORO_TRABAJOS_POR_LARGO = 4;   // tras 4 trabajos se sugiere el descanso largo
+const uint32_t POMODORO_REPETIR_AVISO_MS = 60000; // al terminar, pitido cada minuto
+const uint16_t PITIDO_HZ = 2000;
+const uint16_t PITIDO_MS = 250;
 
 // ---- Administración desde el PC ----
 const uint32_t SESION_PC_MS = 60000;         // sin órdenes, se cierra la pantalla del PC

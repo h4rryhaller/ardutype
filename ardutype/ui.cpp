@@ -14,6 +14,7 @@
 #include "boveda.h"
 #include "admin.h"
 #include "ui.h"
+#include "pomodoro.h"
 #include "dice_lista.h"   // lista de palabras (castellano): clave de recuperación
 
 using AlAceptarTexto = std::function<void(const char *)>;
@@ -27,6 +28,8 @@ class Pantalla {
   virtual void dibujar() = 0;
   virtual void tick() {}
   virtual bool apagable() { return true; }  // el OLED puede apagarse por inactividad
+  virtual bool atenuable() { return false; } // en vez de apagarse, baja el brillo
+  virtual bool sinBoveda() { return false; } // se puede usar bloqueado (pomodoro)
 };
 
 // ---- Pila de pantallas, avisos y bloqueo ----
@@ -41,6 +44,7 @@ static bool avisoActivo = false;
 static uint32_t avisoHastaMs = 0;
 
 static uint32_t ultimaTeclaMs = 0;
+static bool atenuada = false;  // OLED al mínimo por inactividad (pantalla del pomodoro)
 static uint8_t fallosPin = 0;
 static uint32_t esperaPinHastaMs = 0;
 
@@ -977,18 +981,164 @@ class ListaServicios : public Lista {
 };
 ListaServicios servicios;
 
+// ---- Pomodoro ----
+
+// "12:34" redondeando hacia arriba (nunca enseña 00:00 con tiempo pendiente)
+static void minutosSegundos(uint32_t ms, char *buf, size_t tam, bool redondearArriba = true) {
+  uint32_t s = redondearArriba ? (ms + 999) / 1000 : ms / 1000;
+  snprintf(buf, tam, "%02lu:%02lu", (unsigned long)(s / 60), (unsigned long)(s % 60));
+}
+
+// Una línea con el estado, para la pantalla de bloqueo
+static void textoPomodoro(char *buf, size_t tam) {
+  char t[8];
+  const char *nombre = pomodoroNombre(pomodoroFase());
+  switch (pomodoroEstado()) {
+    case POMO_CORRIENDO:
+      minutosSegundos(pomodoroRestanteMs(), t, sizeof(t));
+      snprintf(buf, tam, "%s %s", nombre, t);
+      break;
+    case POMO_PAUSADO:
+      minutosSegundos(pomodoroRestanteMs(), t, sizeof(t));
+      snprintf(buf, tam, "Pausa: %s %s", nombre, t);
+      break;
+    case POMO_TERMINADO: snprintf(buf, tam, "Fin: %s", nombre); break;
+    default: buf[0] = '\0'; break;
+  }
+}
+
+// Lo que se ve cambia como mucho una vez por segundo
+static uint32_t huellaPomodoro() {
+  uint32_t ms = pomodoroEstado() == POMO_TERMINADO ? pomodoroPasadoFinMs() : pomodoroRestanteMs();
+  return (ms / 1000) * 16 + pomodoroEstado() * 4 + pomodoroFase();
+}
+
+class MenuPomodoro : public Lista {
+  enum Opcion : uint8_t { PAUSAR, REANUDAR, FASE_TRABAJO, FASE_DESCANSO, FASE_LARGO, DETENER };
+  Opcion opciones[6];
+
+  int construir() {
+    int n = 0;
+    EstadoPomodoro e = pomodoroEstado();
+    if (e == POMO_CORRIENDO || e == POMO_TERMINADO) opciones[n++] = PAUSAR;
+    if (pomodoroPuedeReanudar()) opciones[n++] = REANUDAR;
+    opciones[n++] = FASE_TRABAJO;
+    opciones[n++] = FASE_DESCANSO;
+    opciones[n++] = FASE_LARGO;
+    if (e != POMO_INACTIVO) opciones[n++] = DETENER;
+    return n;
+  }
+
+ protected:
+  void titulo(char *buf, size_t tam) override { snprintf(buf, tam, "Pomodoro"); }
+  int numItems() override { return construir(); }
+
+  void item(int i, char *buf, size_t tam) override {
+    construir();
+    switch (opciones[i]) {
+      case PAUSAR: snprintf(buf, tam, "Pausar"); break;
+      case REANUDAR: snprintf(buf, tam, "Reanudar"); break;
+      case DETENER: snprintf(buf, tam, "Detener"); break;
+      default: {
+        FasePomodoro f = (FasePomodoro)(opciones[i] - FASE_TRABAJO);
+        snprintf(buf, tam, "%s %lu min", f == DESCANSO_LARGO ? "D. largo" : pomodoroNombre(f),
+                 (unsigned long)(pomodoroDuracionMs(f) / 60000));
+      }
+    }
+  }
+
+  void elegir(int i) override {
+    construir();
+    switch (opciones[i]) {
+      case PAUSAR: pomodoroPausar(); break;
+      case REANUDAR: pomodoroReanudar(); break;
+      case DETENER: pomodoroDetener(); break;
+      default: pomodoroEmpezar((FasePomodoro)(opciones[i] - FASE_TRABAJO)); break;
+    }
+    uiPop();
+  }
+
+ public:
+  bool sinBoveda() override { return true; }
+
+  // El cursor empieza en lo más probable: la fase que toca si la anterior ha
+  // terminado o está parada, «Pausar»/«Reanudar» si hay una a medias.
+  void abrir() {
+    uiPush(this);
+    EstadoPomodoro e = pomodoroEstado();
+    bool aMedias = e == POMO_CORRIENDO || pomodoroPuedeReanudar();
+    if (aMedias) return;
+    int n = construir();
+    Opcion buscada = (Opcion)(FASE_TRABAJO + (e == POMO_INACTIVO ? TRABAJO : pomodoroSugerida()));
+    for (int i = 0; i < n; i++)
+      if (opciones[i] == buscada) seleccionar(i);
+  }
+};
+static MenuPomodoro menuPomodoro;
+
+class PantallaPomodoro : public Pantalla {
+  uint32_t huella = 0;
+
+ public:
+  bool sinBoveda() override { return true; }
+  bool atenuable() override { return pomodoroEstado() != POMO_INACTIVO; }
+
+  void tecla(Tecla t) override {
+    switch (t) {
+      case CENTRO:
+      case DERECHA: menuPomodoro.abrir(); break;
+      case IZQUIERDA: uiPop(); break;
+      case CENTRO_LARGO: bloquear(); break;
+      default: break;
+    }
+  }
+
+  void tick() override {
+    uint32_t h = huellaPomodoro();
+    if (h != huella) {
+      huella = h;
+      sucio = true;
+    }
+  }
+
+  void dibujar() override {
+    EstadoPomodoro e = pomodoroEstado();
+    if (e == POMO_INACTIVO) {
+      pantallaCabecera("Pomodoro");
+      oled.setFont(FUENTE_NORMAL);
+      pantallaCentrado(19, "Centro: elegir fase");
+      pantallaCentrado(30, "Izquierda: volver");
+      return;
+    }
+    const char *estado = e == POMO_PAUSADO ? "pausa" : e == POMO_TERMINADO ? "¡fin!" : "";
+    pantallaCabecera(pomodoroNombre(pomodoroFase()), estado);
+    char t[10];
+    if (e == POMO_TERMINADO) {
+      // Tiempo pasado desde el final
+      t[0] = '+';
+      minutosSegundos(pomodoroPasadoFinMs(), t + 1, sizeof(t) - 1, false);
+    } else {
+      minutosSegundos(pomodoroRestanteMs(), t, sizeof(t));
+    }
+    oled.setFont(FUENTE_GRANDE);
+    pantallaCentrado(28, t);
+  }
+};
+static PantallaPomodoro pantallaPomodoro;
+
 // ---- Menú principal: categorías ----
 
 class MenuPrincipal : public Lista {
  protected:
   void titulo(char *buf, size_t tam) override { snprintf(buf, tam, "Ardutype"); }
-  int numItems() override { return almacenNumCategorias() + 3; }
+  int numItems() override { return almacenNumCategorias() + 4; }
 
   void item(int i, char *buf, size_t tam) override {
     int n = almacenNumCategorias();
     if (i < n) snprintf(buf, tam, "%s (%d)", almacenCategoria(i), almacenContarServicios(i));
     else if (i == n) snprintf(buf, tam, "+ Nueva categoría");
-    else if (i == n + 1) snprintf(buf, tam, "Ajustes");
+    else if (i == n + 1) snprintf(buf, tam, "Pomodoro");
+    else if (i == n + 2) snprintf(buf, tam, "Ajustes");
     else snprintf(buf, tam, "Bloquear");
   }
 
@@ -1000,8 +1150,9 @@ static MenuPrincipal menu;
 void MenuPrincipal::elegir(int i) {
   int n = almacenNumCategorias();
   if (i < n) return servicios.abrir(i);
-  if (i == n + 1) return uiPush(&ajustes);
-  if (i == n + 2) return bloquear();
+  if (i == n + 1) return uiPush(&pantallaPomodoro);
+  if (i == n + 2) return uiPush(&ajustes);
+  if (i == n + 3) return bloquear();
   rueda.abrir("Nueva categoría", "", LARGO_NOMBRE, false, [](const char *t) {
     int c = almacenNuevaCategoria(t);
     uiVolverA(&menu);
@@ -1176,6 +1327,12 @@ static void pedirRecuperacion();
 
 class PantallaBloqueo : public Pantalla {
   int ultimoSegundo = -1;
+  uint32_t ultimaHuella = 0;
+
+  // Con un pomodoro en marcha, la línea de abajo alterna con su estado
+  bool tocaPomodoro() {
+    return pomodoroEstado() != POMO_INACTIVO && (millis() / 3000) % 2;
+  }
 
   int segundosEspera() {
     int32_t queda = (int32_t)(esperaPinHastaMs - millis());
@@ -1184,6 +1341,7 @@ class PantallaBloqueo : public Pantalla {
 
  public:
   void tecla(Tecla t) override {
+    if (t == ARRIBA) return uiPush(&pantallaPomodoro);  // no necesita la bóveda
     if (segundosEspera()) return;
     if (t == CENTRO || t == DERECHA) pedirPin();
     else if (t == CENTRO_LARGO) pedirRecuperacion();
@@ -1195,6 +1353,11 @@ class PantallaBloqueo : public Pantalla {
       ultimoSegundo = s;
       sucio = true;
     }
+    uint32_t h = huellaPomodoro() * 2 + tocaPomodoro();
+    if (h != ultimaHuella) {
+      ultimaHuella = h;
+      sucio = true;
+    }
   }
 
   void dibujar() override {
@@ -1204,6 +1367,7 @@ class PantallaBloqueo : public Pantalla {
     char t[32];
     int s = segundosEspera();
     if (s) snprintf(t, sizeof(t), "Espera %d s", s);
+    else if (tocaPomodoro()) textoPomodoro(t, sizeof(t));
     else snprintf(t, sizeof(t), "Centro: PIN. Largo: clave");
     pantallaCentrado(29, t);
   }
@@ -1624,6 +1788,11 @@ void uiTick() {
   if (t != NINGUNA) {
     ultimaTeclaMs = ahora;
     ledPulsacion();
+    if (atenuada) {
+      atenuada = false;
+      pantallaContraste(CONTRASTES[aj().brillo]);
+      if (pantallaEncendida()) t = NINGUNA;  // la tecla solo devuelve el brillo
+    }
     if (!pantallaEncendida()) {
       pantallaEncender(true);  // la tecla solo despierta
       ledReposo(false);
@@ -1648,13 +1817,25 @@ void uiTick() {
 
   if (bovedaEstado() == BOVEDA_ABIERTA && cima()->apagable() &&
       ahora - ultimaTeclaMs >= BLOQUEOS_MIN[aj().bloqueo] * 60000UL) {
+    // Mirando el pomodoro: se cierra la bóveda, pero la cuenta atrás sigue a la vista
+    bool pomodoro = cima()->sinBoveda();
     bloquear();
-    pantallaEncender(false);
-    ledReposo(true);
+    if (pomodoro) {
+      uiPush(&pantallaPomodoro);
+    } else {
+      pantallaEncender(false);
+      ledReposo(true);
+    }
   }
-  if (pantallaEncendida() && cima()->apagable() && ahora - ultimaTeclaMs >= APAGAR_PANTALLA_MS) {
-    pantallaEncender(false);
-    ledReposo(true);  // arcoíris mientras está en reposo
+  if (pantallaEncendida() && !atenuada && cima()->apagable() &&
+      ahora - ultimaTeclaMs >= APAGAR_PANTALLA_MS) {
+    if (cima()->atenuable()) {
+      atenuada = true;
+      pantallaContraste(CONTRASTES[0]);
+    } else {
+      pantallaEncender(false);
+      ledReposo(true);  // arcoíris mientras está en reposo
+    }
   }
 
   if (sucio && pantallaEncendida()) {

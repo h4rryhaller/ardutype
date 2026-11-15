@@ -48,6 +48,7 @@ Del bus I2C: **D12 es SDA y D13 es SCL**, confirmado en la guía de pinout de Ad
 | Joystick ABAJO | D5 | idem |
 | Joystick PULSACIÓN CENTRAL | D6 | idem |
 | Joystick COMÚN | GND | |
+| Zumbador pasivo | D8 (GPIO8) → resistencia → zumbador → GND | Pomodoro (2026-11-15). Ver la nota de corriente en la fase 9 |
 | LED de estado | NeoPixel de la placa (GPIO17 según el core; sin confirmar en la placa) | Ya soldado en la placa |
 
 **Mapeo del joystick cableado y comprobado con el polímetro (2026-10-25):** D2 arriba, D3 derecha, D4 izquierda, D5 abajo, D6 centro. La KB2040 va soldada con sus pines a la PCB (sin zócalo). Sketch de prueba: `prueba_hardware/`.
@@ -275,6 +276,16 @@ Detalles prácticos:
    - **Clave de recuperación en palabras** (decisión del usuario, 2026-11-12): **8 palabras** al azar de `dice_lista.h` (1459 palabras, ~84 bits), con el mismo PBKDF2 calibrado (~1 s) que el PIN, ya que no pasa por el chip (ranura `RANURA_PALABRAS`). Se enseña al crear la bóveda en 4 páginas de 2 palabras numeradas (derecha/izquierda pasan página; centro largo confirma desde la última). Se mete con la rueda de palabras de la PoC, generalizada (3 letras + centro por palabra; al completar las 8 se comprueba sola). Las bóvedas anteriores siguen aceptando su clave base32. Descartadas: 12 palabras sin derivación lenta (126 bits) y dejar el base32.
 
    **Producción (2026-11-14):** patas 5 y 6 del ATECC aisladas; bóveda borrada y creada de cero con el chip puesto. La estética (fase 6) se da por buena de momento. Empieza el uso con contraseñas reales.
+
+9. **Pomodoro (2026-11-15, probado en la placa: todo correcto).** Zumbador **piezo** con 100 Ω en D8.
+   - **Fases:** trabajo 25 min (LED naranja), descanso 5 min (verde), descanso largo 15 min (azul); se eligen a mano. **Pausa** indefinida: el LED parpadea despacio (1 s) con el color de la fase pausada y «Reanudar» sigue donde se quedó.
+   - **Al terminar:** un pitido y el LED parpadea deprisa (2 veces por segundo) con el color de la fase; el pitido se repite cada minuto hasta que se pausa (silencia) o se empieza otra fase. La pantalla muestra «¡fin!» y el tiempo pasado desde el final (`+02:13`).
+   - **Interfaz:** menú principal → «Pomodoro»: cabecera con la fase y cuenta atrás en grande. Centro o derecha abren el menú (Pausar / Reanudar, Trabajo, Descanso, D. largo, Detener), con el cursor en lo más probable: tras un trabajo, el descanso, y el largo cada 4 trabajos. Izquierda vuelve, centro largo bloquea.
+   - **Sin la bóveda:** el pomodoro no toca contraseñas, así que funciona bloqueado. En la pantalla de bloqueo, **arriba** lo abre, y la línea de abajo alterna cada 3 s con su estado. Si salta el bloqueo automático mirando el pomodoro, se cierra la bóveda pero la cuenta atrás sigue en pantalla.
+   - **OLED:** en la pantalla del pomodoro con una fase en marcha no se apaga a los 60 s: baja al brillo mínimo; la primera tecla solo lo devuelve.
+   - **LED:** el color del pomodoro tiene prioridad sobre el arcoíris de reposo, así que se ve en cualquier pantalla; los destellos (pulsación, error) y el tecleo siguen por encima. Con el LED desactivado en Ajustes no se ve.
+   - **Código:** `pomodoro.h/.cpp` (motor, independiente de la interfaz, con `pomodoroTick()` en el `loop`), `zumbador.h/.cpp` (`tone()` sin bloquear), `ledPomodoro()` en `led`, y `MenuPomodoro`/`PantallaPomodoro` en `ui.cpp`. Duraciones, tono (2 kHz, 250 ms) y pin en `config.h`.
+   - **Zumbador y corriente:** el de pranayama-helper lleva 100 Ω, pero esa placa va a 5 V. Un GPIO del RP2040 da como mucho 12 mA. Con un zumbador **piezo** (con el polímetro, sin continuidad o MΩ) los 100 Ω valen. Con uno **magnético** (bobina de 16-42 Ω) saldrían ~28 mA: o una resistencia de 330 Ω (~9 mA, suena menos) o un transistor NPN (BC337/2N2222, 1 kΩ en la base, zumbador entre 3V3 o VBUS y el colector, con diodo en paralelo).
 
 ### Posibles mejoras (ideas)
 

@@ -15,6 +15,13 @@
 
 #include <LittleFS.h>
 
+// Flash Size: la bóveda vive en el sistema de ficheros, y su sitio en la flash
+// depende de este ajuste. Con otro, se formatearía otra zona de la flash. Se exige al
+// compilar, también desde el IDE: «8MB (Sketch: 7MB, FS: 1MB)».
+#if !defined(FS_START) || FS_START != 275771392 || FS_END != 276819968
+#error "Flash Size equivocado: elige «8MB (Sketch: 7MB, FS: 1MB)» en Herramientas"
+#endif
+
 static bool hayChip = false;
 
 static void listar() {
@@ -49,12 +56,15 @@ void setup() {
   while (!Serial) delay(10);
   delay(200);
   Serial.println("\n==== Ardutype: formatear la memoria de ficheros ====");
-  if (!LittleFS.begin()) {
-    Serial.println("No hay memoria de ficheros: elige Flash Size «8MB (Sketch: 7MB, FS: 1MB)» y vuelve a subirlo.");
-    return;
+  // Sin formateo automático: solo se formatea si se pide abajo
+  LittleFS.setConfig(LittleFSConfig(false));
+  if (LittleFS.begin()) {
+    Serial.println("Contenido:");
+    listar();
+  } else {
+    Serial.println("No se puede montar: sin formato o dañada (contenido desconocido).");
+    Serial.println("Si estaba en uso con el chip, formatear deja el ATECC608 sin su clave ADMIN.");
   }
-  Serial.println("Contenido:");
-  listar();
 
   const char *pedir = "FORMATEAR";
   if (hayChip) {

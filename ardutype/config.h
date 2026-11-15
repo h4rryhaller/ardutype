@@ -3,6 +3,13 @@
 
 #include <Arduino.h>
 
+// Flash Size: la bóveda vive en el sistema de ficheros, y su sitio en la flash
+// depende de este ajuste. Con otro, el firmware no la encontraría. Se exige al
+// compilar, también desde el IDE: «8MB (Sketch: 7MB, FS: 1MB)», o subir.sh.
+#if !defined(FS_START) || FS_START != 275771392 || FS_END != 276819968
+#error "Flash Size equivocado: elige «8MB (Sketch: 7MB, FS: 1MB)» en Herramientas, o usa subir.sh"
+#endif
+
 // ---- Pines (KB2040) ----
 // Dos buses I2C. Compartiendo uno, el tráfico del OLED despertaba al ATECC608
 // y los envíos a la pantalla se quedaban colgados (2026-11-12).
@@ -58,6 +65,11 @@ const uint8_t POMODORO_TRABAJOS_POR_LARGO = 4;   // tras 4 trabajos se sugiere e
 const uint32_t POMODORO_REPETIR_AVISO_MS = 60000; // al terminar, pitido cada minuto
 const uint16_t PITIDO_HZ = 2000;
 const uint16_t PITIDO_MS = 250;
+
+// ---- Mantener sesión ----
+// Un movimiento de ratón de 1 px (y vuelta) cada 30 s: el PC no se bloquea
+// por inactividad. Los sistemas permiten como mínimo 1 min de espera.
+const uint32_t MANTENER_INTERVALO_MS = 30000;
 
 // ---- Administración desde el PC ----
 const uint32_t SESION_PC_MS = 60000;         // sin órdenes, se cierra la pantalla del PC

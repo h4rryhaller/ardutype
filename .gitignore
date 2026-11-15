@@ -4,3 +4,7 @@ __pycache__/
 
 # Documentación de terceros (solo en local)
 *.pdf
+
+# Compilación de subir.sh y arduino-cli descargado por él
+build/
+herramienta/bin/

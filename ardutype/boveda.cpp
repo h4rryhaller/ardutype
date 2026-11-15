@@ -348,6 +348,9 @@ static ResultadoApertura abrirCuerpo() {
 EstadoBoveda bovedaIniciar() {
   cabecera.ajustes = AJUSTES_INICIALES;
   Serial.printf("Chip ATECC608: %s\n", nombreChip(ateccIniciar()));
+  // Sin formateo automático: si no se puede montar, no se toca nada (la
+  // bóveda y /chip.bin siguen ahí). Para formatear, formatear_memoria.
+  LittleFS.setConfig(LittleFSConfig(false));
   if (!LittleFS.begin()) return estado = BOVEDA_SIN_FS;
   size_t largo;
   if (!LittleFS.exists(FICHERO)) return estado = BOVEDA_NUEVA;

@@ -1,0 +1,7 @@
+# Acceso por USB al Ardutype (KB2040) para picotool, sin root, al grupo plugdev:
+# en marcha (Adafruit 239a:8106) y en modo BOOTSEL (Raspberry Pi 2e8a:0003).
+# Instalar:
+#   sudo cp herramienta/60-ardutype.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+SUBSYSTEM=="usb", ATTRS{idVendor}=="239a", ATTRS{idProduct}=="8106", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2e8a", ATTRS{idProduct}=="0003", MODE="0660", GROUP="plugdev"

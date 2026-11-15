@@ -15,6 +15,7 @@
 #include "admin.h"
 #include "ui.h"
 #include "pomodoro.h"
+#include "mantener.h"
 #include "dice_lista.h"   // lista de palabras (castellano): clave de recuperación
 
 using AlAceptarTexto = std::function<void(const char *)>;
@@ -29,7 +30,9 @@ class Pantalla {
   virtual void tick() {}
   virtual bool apagable() { return true; }  // el OLED puede apagarse por inactividad
   virtual bool atenuable() { return false; } // en vez de apagarse, baja el brillo
-  virtual bool sinBoveda() { return false; } // se puede usar bloqueado (pomodoro)
+  // Si salta el bloqueo automático con esta pantalla arriba, la que sigue a la
+  // vista encima de la de bloqueo (una que no necesite la bóveda)
+  virtual Pantalla *trasBloqueo() { return nullptr; }
 };
 
 // ---- Pila de pantallas, avisos y bloqueo ----
@@ -1059,7 +1062,7 @@ class MenuPomodoro : public Lista {
   }
 
  public:
-  bool sinBoveda() override { return true; }
+  Pantalla *trasBloqueo() override;
 
   // El cursor empieza en lo más probable: la fase que toca si la anterior ha
   // terminado o está parada, «Pausar»/«Reanudar» si hay una a medias.
@@ -1069,7 +1072,8 @@ class MenuPomodoro : public Lista {
     bool aMedias = e == POMO_CORRIENDO || pomodoroPuedeReanudar();
     if (aMedias) return;
     int n = construir();
-    Opcion buscada = (Opcion)(FASE_TRABAJO + (e == POMO_INACTIVO ? TRABAJO : pomodoroSugerida()));
+    int fase = e == POMO_INACTIVO ? TRABAJO : pomodoroSugerida();
+    Opcion buscada = (Opcion)(FASE_TRABAJO + fase);
     for (int i = 0; i < n; i++)
       if (opciones[i] == buscada) seleccionar(i);
   }
@@ -1080,7 +1084,7 @@ class PantallaPomodoro : public Pantalla {
   uint32_t huella = 0;
 
  public:
-  bool sinBoveda() override { return true; }
+  Pantalla *trasBloqueo() override { return this; }
   bool atenuable() override { return pomodoroEstado() != POMO_INACTIVO; }
 
   void tecla(Tecla t) override {
@@ -1126,19 +1130,83 @@ class PantallaPomodoro : public Pantalla {
 };
 static PantallaPomodoro pantallaPomodoro;
 
+Pantalla *MenuPomodoro::trasBloqueo() { return &pantallaPomodoro; }
+
+// ---- Mantener sesión ----
+
+// "1 h 23 min", "45 min", "<1 min"
+static void textoDuracion(uint32_t ms, char *buf, size_t tam) {
+  uint32_t min = (ms + 59999) / 60000;
+  if (ms < 60000) snprintf(buf, tam, "<1 min");
+  else if (min < 60) snprintf(buf, tam, "%lu min", (unsigned long)min);
+  else if (min % 60 == 0) snprintf(buf, tam, "%lu h", (unsigned long)(min / 60));
+  else snprintf(buf, tam, "%lu h %lu min", (unsigned long)(min / 60), (unsigned long)(min % 60));
+}
+
+static void textoMantener(char *buf, size_t tam) {
+  if (mantenerSinLimite()) {
+    snprintf(buf, tam, "Sesión: sin límite");
+  } else {
+    char d[16];
+    textoDuracion(mantenerRestanteMs(), d, sizeof(d));
+    snprintf(buf, tam, "Sesión: %s", d);
+  }
+}
+
+static const uint32_t DURACIONES_MANTENER_MS[] = {30 * 60000UL, 60 * 60000UL, 120 * 60000UL,
+                                                   240 * 60000UL, 0};
+
+class MenuMantener : public Lista {
+  int primeraDuracion() { return mantenerActivo() ? 1 : 0; }
+
+ protected:
+  void titulo(char *buf, size_t tam) override { snprintf(buf, tam, "Mantener sesión"); }
+  int numItems() override { return primeraDuracion() + NUM(DURACIONES_MANTENER_MS); }
+
+  void item(int i, char *buf, size_t tam) override {
+    if (i < primeraDuracion()) {
+      char d[24];
+      if (mantenerSinLimite()) snprintf(d, sizeof(d), "sin límite");
+      else textoDuracion(mantenerRestanteMs(), d, sizeof(d));
+      snprintf(buf, tam, "Desactivar (%s)", d);
+      return;
+    }
+    uint32_t ms = DURACIONES_MANTENER_MS[i - primeraDuracion()];
+    if (!ms) snprintf(buf, tam, "Sin límite");
+    else textoDuracion(ms, buf, tam);
+  }
+
+  void elegir(int i) override {
+    uiPop();
+    if (i < primeraDuracion()) {
+      mantenerDesactivar();
+      return aviso("Desactivado");
+    }
+    uint32_t ms = DURACIONES_MANTENER_MS[i - primeraDuracion()];
+    mantenerActivar(ms);
+    char t[32], d[16];
+    if (ms) textoDuracion(ms, d, sizeof(d));
+    snprintf(t, sizeof(t), "Activo: %s", ms ? d : "sin límite");
+    aviso(t);
+  }
+};
+static MenuMantener menuMantener;
+
 // ---- Menú principal: categorías ----
 
 class MenuPrincipal : public Lista {
  protected:
   void titulo(char *buf, size_t tam) override { snprintf(buf, tam, "Ardutype"); }
-  int numItems() override { return almacenNumCategorias() + 4; }
+  int numItems() override { return almacenNumCategorias() + 5; }
 
   void item(int i, char *buf, size_t tam) override {
     int n = almacenNumCategorias();
     if (i < n) snprintf(buf, tam, "%s (%d)", almacenCategoria(i), almacenContarServicios(i));
     else if (i == n) snprintf(buf, tam, "+ Nueva categoría");
     else if (i == n + 1) snprintf(buf, tam, "Pomodoro");
-    else if (i == n + 2) snprintf(buf, tam, "Ajustes");
+    else if (i == n + 2 && mantenerActivo()) textoMantener(buf, tam);
+    else if (i == n + 2) snprintf(buf, tam, "Mantener sesión");
+    else if (i == n + 3) snprintf(buf, tam, "Ajustes");
     else snprintf(buf, tam, "Bloquear");
   }
 
@@ -1151,8 +1219,9 @@ void MenuPrincipal::elegir(int i) {
   int n = almacenNumCategorias();
   if (i < n) return servicios.abrir(i);
   if (i == n + 1) return uiPush(&pantallaPomodoro);
-  if (i == n + 2) return uiPush(&ajustes);
-  if (i == n + 3) return bloquear();
+  if (i == n + 2) return uiPush(&menuMantener);
+  if (i == n + 3) return uiPush(&ajustes);
+  if (i == n + 4) return bloquear();
   rueda.abrir("Nueva categoría", "", LARGO_NOMBRE, false, [](const char *t) {
     int c = almacenNuevaCategoria(t);
     uiVolverA(&menu);
@@ -1329,9 +1398,16 @@ class PantallaBloqueo : public Pantalla {
   int ultimoSegundo = -1;
   uint32_t ultimaHuella = 0;
 
-  // Con un pomodoro en marcha, la línea de abajo alterna con su estado
-  bool tocaPomodoro() {
-    return pomodoroEstado() != POMO_INACTIVO && (millis() / 3000) % 2;
+  // La línea de abajo alterna cada 3 s entre la ayuda y el estado del
+  // pomodoro y de «mantener sesión», si están en marcha
+  enum Linea : uint8_t { AYUDA, LINEA_POMODORO, LINEA_MANTENER };
+  Linea lineaActual() {
+    Linea lineas[3];
+    int n = 0;
+    lineas[n++] = AYUDA;
+    if (pomodoroEstado() != POMO_INACTIVO) lineas[n++] = LINEA_POMODORO;
+    if (mantenerActivo()) lineas[n++] = LINEA_MANTENER;
+    return lineas[(millis() / 3000) % n];
   }
 
   int segundosEspera() {
@@ -1341,7 +1417,9 @@ class PantallaBloqueo : public Pantalla {
 
  public:
   void tecla(Tecla t) override {
-    if (t == ARRIBA) return uiPush(&pantallaPomodoro);  // no necesita la bóveda
+    // Ni el pomodoro ni «mantener sesión» necesitan la bóveda
+    if (t == ARRIBA) return uiPush(&pantallaPomodoro);
+    if (t == ABAJO) return uiPush(&menuMantener);
     if (segundosEspera()) return;
     if (t == CENTRO || t == DERECHA) pedirPin();
     else if (t == CENTRO_LARGO) pedirRecuperacion();
@@ -1353,7 +1431,7 @@ class PantallaBloqueo : public Pantalla {
       ultimoSegundo = s;
       sucio = true;
     }
-    uint32_t h = huellaPomodoro() * 2 + tocaPomodoro();
+    uint32_t h = huellaPomodoro() * 4 + lineaActual() + mantenerRestanteMs() / 60000 * 64 + mantenerActivo() * 2;
     if (h != ultimaHuella) {
       ultimaHuella = h;
       sucio = true;
@@ -1367,7 +1445,8 @@ class PantallaBloqueo : public Pantalla {
     char t[32];
     int s = segundosEspera();
     if (s) snprintf(t, sizeof(t), "Espera %d s", s);
-    else if (tocaPomodoro()) textoPomodoro(t, sizeof(t));
+    else if (lineaActual() == LINEA_POMODORO) textoPomodoro(t, sizeof(t));
+    else if (lineaActual() == LINEA_MANTENER) textoMantener(t, sizeof(t));
     else snprintf(t, sizeof(t), "Centro: PIN. Largo: clave");
     pantallaCentrado(29, t);
   }
@@ -1394,9 +1473,11 @@ class SinMemoria : public Pantalla {
  public:
   void tecla(Tecla) override {}
   void dibujar() override {
-    pantallaCabecera("Falta la memoria");
-    pantallaFila(0, "IDE: Flash Size con", false);
-    pantallaFila(1, "FS (8MB, FS: 1MB)", false);
+    // El Flash Size ya se comprueba al compilar: o está sin formatear (placa
+    // nueva) o el sistema de ficheros está dañado. No se formatea solo.
+    pantallaCabecera("Memoria no legible");
+    pantallaFila(0, "Sin formato o dañada", false);
+    pantallaFila(1, "formatear_memoria", false);
   }
 };
 static SinMemoria sinMemoria;
@@ -1818,10 +1899,10 @@ void uiTick() {
   if (bovedaEstado() == BOVEDA_ABIERTA && cima()->apagable() &&
       ahora - ultimaTeclaMs >= BLOQUEOS_MIN[aj().bloqueo] * 60000UL) {
     // Mirando el pomodoro: se cierra la bóveda, pero la cuenta atrás sigue a la vista
-    bool pomodoro = cima()->sinBoveda();
+    Pantalla *sigue = cima()->trasBloqueo();
     bloquear();
-    if (pomodoro) {
-      uiPush(&pantallaPomodoro);
+    if (sigue) {
+      uiPush(sigue);
     } else {
       pantallaEncender(false);
       ledReposo(true);

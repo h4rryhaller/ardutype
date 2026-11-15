@@ -162,6 +162,30 @@ Consecuencias:
 - **Reflashear el firmware es posible** (basta arrastrar un UF2), pero sin la contraseña maestra no se descifra el almacén.
 - **Generador de contraseñas:** combinar el generador aleatorio de hardware del RP2040 (`rp2040.hwrand32()`) con ruido del ADC y tiempos de pulsación, y mezclarlo con SHA-256. Su calidad es discutible, y el ATECC608 la resolvería mejor.
 
+### Uso previsto (2026-11-15)
+
+El 90 % de las contraseñas se meten en Firefox desde KeePassXC; el Ardutype no compite con eso. Su sitio es donde KeePassXC no llega: antes de arrancar el sistema (cifrado del disco, BIOS, GRUB), el inicio de sesión y las consolas TTY, máquinas ajenas o del trabajo donde no se puede instalar nada (el origen del proyecto, write-pass), máquinas virtuales o consolas remotas sin portapapeles, y el móvil por USB OTG. Uso limitado, pero útil. Por eso conviene **guardar en él solo las contraseñas de esos casos** (revisión de seguridad, abajo). Para darle más uso: el pomodoro (fase 9), los guiones (fase 5, ya hechos) y el modo «mantener sesión» (idea pendiente, en «Posibles mejoras»). Decidir la fase 7 según lo que se use en las próximas semanas.
+
+### Revisión de seguridad (2026-11-15)
+
+Vista de un usuario exigente con el dispositivo ya en producción. **Conclusión:** fiable ante pérdida o robo; débil ante quien pueda manipularlo a solas y devolverlo.
+
+**Lo que aguanta:** sin el chip no se puede probar ningún PIN, y con él como mucho 10-41 intentos (0,004 % con 6 cifras). La clave de recuperación de 8 palabras (~84 bits) no se rompe por fuerza bruta. Primitivas estándar (BearSSL). Superficie pequeña: sin radio; las órdenes del PC exigen desbloqueo y confirmación en el aparato; al desenchufarlo queda bloqueado. La copia maestra está en KeePassXC.
+
+**Preocupaciones, de más a menos grave:**
+1. **Firmware sin verificar ("criada malvada").** El RP2040 no tiene arranque seguro: con el botón BOOT cualquiera carga otro `.uf2`. Un firmware manipulado puede capturar el PIN la siguiente vez (y con el chip, abrir la bóveda) o comportarse como *rubber ducky* contra el PC, que ya confía en él como teclado. No tiene solución con esta placa.
+2. **Escucha del bus I2C del ATECC** (ya fuera del modelo, sección 10, fase 8): quien conecte un analizador mientras se desbloquea obtiene `h`, que junto a un volcado de la flash abre la bóveda. Ahora las patas del chip quedan accesibles bajo la placa de protección.
+3. **Desbloqueado y desatendido lo da todo** (navegar, «Mostrar» en el OLED). Bloqueo automático por defecto: 15 min.
+4. **Sin auditoría:** las primitivas son buenas, pero su composición (ranuras, envoltura de claves, protocolo serie) solo la hemos revisado nosotros.
+5. **Las contraseñas también están en el móvil** (KeePassDX + Syncthing): su seguridad cuenta tanto como la del Ardutype.
+6. **Teclear tiene sus riesgos:** foco en la ventana equivocada (sección «Riesgo principal») y keyloggers en el PC, igual que tecleando a mano.
+
+**Medidas:**
+- Ya, sin coste: bloqueo automático a 5 min; no dejarlo enchufado sin vigilancia; papel de las 8 palabras lejos del aparato; cuidar la seguridad del móvil.
+- Baratas: precinto o pegatina de seguridad sobre la carcasa y el botón BOOT para que se note si lo han abierto; resina sobre el ATECC y sus pistas.
+- Con la fase 7: valorar una placa con **RP2350** (arranque seguro con firmware firmado, claves en OTP), que cierra el punto 1. Estudiar si la *IO protection key* del ATECC608B permite cifrar lo que viaja por el bus (punto 2).
+- **Guardar solo lo que haga falta fuera de KeePassXC** (etiqueta `ardutype`): menos contraseñas en el aparato, menos se pierde si falla cualquiera de lo anterior.
+
 ## 6. Modelo de datos
 
 - **Categorías** (RR.SS., Banca, Trabajo...), con **servicios** dentro.

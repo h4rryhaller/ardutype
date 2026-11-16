@@ -1,0 +1,61 @@
+{
+  "hooks": {
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I /home/nono/Dev/arduino/proyectos/ardutype/herramienta/claude_permiso.py aviso",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I /home/nono/Dev/arduino/proyectos/ardutype/herramienta/claude_permiso.py quitar",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I /home/nono/Dev/arduino/proyectos/ardutype/herramienta/claude_permiso.py quitar",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I /home/nono/Dev/arduino/proyectos/ardutype/herramienta/claude_permiso.py quitar",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I /home/nono/Dev/arduino/proyectos/ardutype/herramienta/claude_permiso.py quitar",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

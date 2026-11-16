@@ -345,6 +345,7 @@ Con esto, sincronizar con KeePassXC antes de subir ya no es imprescindible: solo
      - `Notification` (asíncrono): `permission_prompt` (salta ~6 s después de la petición si no se ha tecleado nada) y `elicitation_dialog` → aviso **con pitido**; `idle_prompt` (~60 s después de terminar Claude, si no se ha escrito nada) → aviso **mudo, solo LED**; el resto de tipos se ignoran.
      - `PostToolUse`, `PostToolUseFailure`, `Stop` y `UserPromptSubmit` (asíncronos) → `claude_permiso.py quitar`: el aviso ya se contestó o ya no hace falta, y se apaga el LED. Claude Code no tiene un evento de «permiso contestado»; estos lo cubren (aceptado → la herramienta se ejecuta; denegado → Claude sigue o termina). Un archivo de marca (`$XDG_RUNTIME_DIR/ardutype-aviso-claude-<uid>`) hace que solo se abra el puerto si queda un aviso puesto.
      - Los hooks añadidos a mitad de sesión no se cargan hasta reiniciar Claude Code (`claude --continue`).
+     - Copia de los hooks en `herramienta/claude_hooks.json` (el bloque `hooks` de `~/.claude/settings.json`, que no está en ningún repo): para rehacerlos, copiar ese bloque en `settings.json`.
 
 ### Posibles mejoras (ideas)
 

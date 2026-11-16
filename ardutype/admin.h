@@ -25,10 +25,11 @@
 //   Cualquier fallo         -> @ERR <motivo>
 //
 // Notificaciones (notificacion.h), también con el Ardutype bloqueado:
-//   AVISO <origen> <texto>                    -> @OK
+//   AVISO [MUDO] <origen> <texto>             -> @OK  (MUDO: sin pitido)
 //   PREGUNTA <id> <segundos> <origen> <texto> -> @OK, y al contestar o vencer
 //                                                el plazo @RESPUESTA <id> SI|NO|TIEMPO
 //   RETIRAR <id>                              -> @OK  (el PC ya no espera respuesta)
+//   QUITAR <origen>                           -> @OK  (quita el aviso si es de ese origen)
 //   Sin respuesta si se cierra el puerto. «@ERR ocupado» si ya hay una
 //   pregunta o se está sincronizando.
 //

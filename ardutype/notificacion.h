@@ -5,7 +5,8 @@
 
 // Notificaciones del PC (órdenes AVISO, PREGUNTA y RETIRAR de admin.h; script
 // herramienta/notificar.py). Hay como mucho una a la vez:
-//   - aviso: un texto; se quita al verlo. Una pregunta lo sustituye.
+//   - aviso: un texto; se quita al verlo. Una pregunta lo sustituye. Puede
+//     ser mudo (solo LED y pantalla, sin pitido).
 //   - pregunta: aceptar o denegar, con plazo. La respuesta sale por el serie
 //     como «@RESPUESTA <id> SI|NO|TIEMPO». Si el PC cierra el puerto, se retira.
 // Pitido y LED violeta al llegar; las preguntas repiten el pitido hasta
@@ -16,9 +17,10 @@ enum TipoNotificacion : uint8_t { NOTI_NINGUNA, NOTI_AVISO, NOTI_PREGUNTA };
 const size_t LARGO_ORIGEN_NOTI = 25;  // bytes UTF-8 con el 0 final
 const size_t LARGO_TEXTO_NOTI = 481;
 
-bool notiAvisar(const char *origen, const char *texto);  // false si hay una pregunta
+bool notiAvisar(const char *origen, const char *texto, bool conPitido);  // false si hay una pregunta
 bool notiPreguntar(uint32_t id, uint32_t segundos, const char *origen, const char *texto);
 bool notiRetirar(uint32_t id);  // la retira el PC (sin respuesta)
+void notiQuitarAviso(const char *origen);  // el PC quita su aviso (si es de ese origen)
 
 void notiResponder(bool si);  // desde la interfaz
 void notiDescartar();         // aviso visto

@@ -302,7 +302,8 @@ static bool leerNumero(const char *s, uint32_t &valor, uint32_t maximo) {
   return true;
 }
 
-// AVISO <origen> <texto> | PREGUNTA <id> <segundos> <origen> <texto> | RETIRAR <id>
+// AVISO [MUDO] <origen> <texto> | PREGUNTA <id> <segundos> <origen> <texto> | RETIRAR <id>
+// | QUITAR <origen>
 static void ordenNotificacion(char **p, int n) {
   if (bovedaEstado() != BOVEDA_CERRADA && bovedaEstado() != BOVEDA_ABIERTA) return error("estado");
   if (sesion != INACTIVA) return error("ocupado");  // sincronizando
@@ -312,14 +313,21 @@ static void ordenNotificacion(char **p, int n) {
     if (n != 2 || !leerNumero(p[1], id, UINT32_MAX)) return error("campos");
     return notiRetirar(id) ? responder("OK") : error("id");
   }
+  if (!strcmp(orden, "QUITAR")) {
+    char origen[LARGO_ORIGEN_NOTI];
+    if (n != 2 || !leerTextoHex(p[1], origen, sizeof(origen), false)) return error("campos");
+    notiQuitarAviso(origen);  // si ya no estaba, también vale
+    return responder("OK");
+  }
   bool pregunta = !strcmp(orden, "PREGUNTA");
-  if (n != (pregunta ? 5 : 3)) return error("campos");
+  bool mudo = !pregunta && n == 4 && !strcmp(p[1], "MUDO");
+  if (n != (pregunta ? 5 : mudo ? 4 : 3)) return error("campos");
   if (pregunta && (!leerNumero(p[1], id, UINT32_MAX) || !leerNumero(p[2], segundos, NOTI_MAX_SEGUNDOS) || !segundos))
     return error("campos");
   char origen[LARGO_ORIGEN_NOTI], texto[LARGO_TEXTO_NOTI];
   if (!leerTextoHex(p[n - 2], origen, sizeof(origen), false) || !leerTextoHex(p[n - 1], texto, sizeof(texto), false))
     return error("texto");
-  bool ok = pregunta ? notiPreguntar(id, segundos, origen, texto) : notiAvisar(origen, texto);
+  bool ok = pregunta ? notiPreguntar(id, segundos, origen, texto) : notiAvisar(origen, texto, !mudo);
   ok ? responder("OK") : error("ocupado");
 }
 
@@ -349,7 +357,8 @@ static void procesar(char *texto) {
     if (sesion != INACTIVA) terminar();
     return responder("OK");
   }
-  if (!strcmp(orden, "AVISO") || !strcmp(orden, "PREGUNTA") || !strcmp(orden, "RETIRAR"))
+  if (!strcmp(orden, "AVISO") || !strcmp(orden, "PREGUNTA") || !strcmp(orden, "RETIRAR") ||
+      !strcmp(orden, "QUITAR"))
     return ordenNotificacion(p, n);
   if (bovedaEstado() != BOVEDA_ABIERTA) return error("bloqueado");
   if (sesion == PREGUNTANDO_ENVIO || sesion == PREGUNTANDO_CAMBIOS) return error("ocupado");

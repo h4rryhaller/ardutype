@@ -6,7 +6,8 @@ El Ardutype pita, el LED parpadea en violeta y la pantalla enseña el texto
 aceptar una pregunta pide entonces el PIN.
 
 Uso:
-  notificar.py aviso    [-o ORIGEN] TEXTO...
+  notificar.py aviso    [-o ORIGEN] [--mudo] TEXTO...
+  notificar.py quitar   [-o ORIGEN]          (quita el aviso de ese origen, si sigue)
   notificar.py pregunta [-o ORIGEN] [-t SEGUNDOS] [-e SEGUNDOS] [--sin-terminal] TEXTO...
   (TEXTO «-»: se lee de la entrada estándar)
 
@@ -225,8 +226,13 @@ def comprobar_ok(r):
         raise Fallo(f"respuesta inesperada: {' '.join(r)}")
 
 
-def avisar(con, origen, texto):
-    comprobar_ok(con.orden("AVISO", origen.hex(), texto.hex()))
+def quitar(con, origen):
+    comprobar_ok(con.orden("QUITAR", origen.hex()))
+    return SI
+
+
+def avisar(con, origen, texto, mudo=False):
+    comprobar_ok(con.orden("AVISO", *(["MUDO"] if mudo else []), origen.hex(), texto.hex()))
     return SI
 
 
@@ -378,7 +384,7 @@ def main():
 
     p = argparse.ArgumentParser(description="Avisos y preguntas en el Ardutype.")
     if not modo_por_nombre:
-        p.add_argument("modo", choices=["aviso", "pregunta"])
+        p.add_argument("modo", choices=["aviso", "pregunta", "quitar"])
     p.add_argument("-o", "--origen", default=os.environ.get("ARDUTYPE_ORIGEN", "PC"),
                    help="quién avisa o pregunta (cabecera de la pantalla)")
     p.add_argument("-t", "--tiempo", type=int, default=120,
@@ -386,16 +392,19 @@ def main():
     p.add_argument("-e", "--espera", type=int, default=int(os.environ.get("ARDUTYPE_ESPERA", "10")),
                    help="segundos en la terminal antes de preguntar también en el Ardutype "
                         "(0: a la vez; por defecto 10)")
+    p.add_argument("--mudo", action="store_true", help="aviso sin pitido (solo LED y pantalla)")
     p.add_argument("--sin-terminal", action="store_true",
                    help="preguntar solo en el Ardutype, aunque haya terminal")
     p.add_argument("-p", "--puerto", default=os.environ.get("ARDUTYPE_PUERTO"))
     p.add_argument("-q", "--silencio", action="store_true", help="sin mensajes de error")
-    p.add_argument("texto", nargs="+")
+    p.add_argument("texto", nargs="*")
     a = p.parse_args()
     modo = modo_por_nombre or a.modo
 
     texto_original = sys.stdin.read() if a.texto == ["-"] else " ".join(a.texto)
     origen, texto = limpiar(a.origen, LARGO_ORIGEN), limpiar(texto_original, LARGO_TEXTO)
+    if modo == "quitar":
+        texto = b"-"  # no lleva texto
     if not texto or not origen:
         p.error("el texto y el origen no pueden estar vacíos")
     if not 1 <= a.tiempo <= MAX_SEGUNDOS:
@@ -412,10 +421,12 @@ def main():
                                           sin_controles(texto_original), origen, texto,
                                           a.tiempo, a.espera, a.silencio)
         puerto = a.puerto or buscar_puerto()
-        if modo == "aviso":
+        if modo in ("aviso", "quitar"):
             con = Conexion(puerto, espera_turno=10)
             try:
-                return avisar(con, origen, texto)
+                if modo == "quitar":
+                    return quitar(con, origen)
+                return avisar(con, origen, texto, a.mudo)
             finally:
                 con.cerrar()
         return preguntar_solo_ardutype(puerto, origen, texto, a.tiempo)

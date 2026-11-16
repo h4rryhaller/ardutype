@@ -27,14 +27,14 @@ static void pitar() {
   ultimoPitidoMs = millis();
 }
 
-static void empezar(TipoNotificacion t, const char *o, const char *x) {
+static void empezar(TipoNotificacion t, const char *o, const char *x, bool conPitido) {
   copiar(origen, sizeof(origen), o);
   copiar(texto, sizeof(texto), x);
   tipo = t;
   numero++;
   inicioMs = millis();
   sinPuertoDesdeMs = 0;
-  pitar();
+  if (conPitido) pitar();
   ledNotificacion(t == NOTI_PREGUNTA ? LED_NOTI_RAPIDO : LED_NOTI_LENTO);
 }
 
@@ -48,9 +48,9 @@ static void contestar(const char *respuesta) {
   terminar();
 }
 
-bool notiAvisar(const char *o, const char *x) {
+bool notiAvisar(const char *o, const char *x, bool conPitido) {
   if (tipo == NOTI_PREGUNTA) return false;
-  empezar(NOTI_AVISO, o, x);
+  empezar(NOTI_AVISO, o, x, conPitido);
   return true;
 }
 
@@ -58,7 +58,7 @@ bool notiPreguntar(uint32_t n, uint32_t segundos, const char *o, const char *x) 
   if (tipo == NOTI_PREGUNTA) return false;
   id = n;
   plazoMs = segundos * 1000;
-  empezar(NOTI_PREGUNTA, o, x);
+  empezar(NOTI_PREGUNTA, o, x, true);
   return true;
 }
 
@@ -66,6 +66,10 @@ bool notiRetirar(uint32_t n) {
   if (tipo != NOTI_PREGUNTA || n != id) return false;
   terminar();
   return true;
+}
+
+void notiQuitarAviso(const char *o) {
+  if (tipo == NOTI_AVISO && !strcmp(origen, o)) terminar();
 }
 
 void notiResponder(bool si) {

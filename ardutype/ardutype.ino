@@ -10,6 +10,8 @@
 // zumbador de D8 y el color del LED; sigue contando con el Ardutype bloqueado.
 // Mantener sesión (mantener.h): el Ardutype es también un ratón USB y lo mueve
 // 1 px cada 30 s para que el PC no bloquee la sesión.
+// Notificaciones (notificacion.h): avisos y preguntas de aceptar o denegar
+// desde el PC (herramienta/notificar.py), con pitido y LED violeta.
 // FASE 8: ATECC608B en el bus del OLED (atecc.h): el chip limita los intentos
 // del PIN. Se provisiona solo, de forma IRREVERSIBLE, la primera vez que se
 // abre o se crea la bóveda con él puesto.
@@ -25,6 +27,7 @@
 #include "zumbador.h"
 #include "pomodoro.h"
 #include "mantener.h"
+#include "notificacion.h"
 
 void setup() {
   Serial.begin(115200);
@@ -44,6 +47,7 @@ void loop() {
   adminTick();
   pomodoroTick();
   mantenerTick();
+  notiTick();
   ledTick();
   delay(1);
 }

@@ -16,6 +16,7 @@
 #include "ui.h"
 #include "pomodoro.h"
 #include "mantener.h"
+#include "notificacion.h"
 #include "dice_lista.h"   // lista de palabras (castellano): clave de recuperación
 
 using AlAceptarTexto = std::function<void(const char *)>;
@@ -50,6 +51,8 @@ static uint32_t ultimaTeclaMs = 0;
 static bool atenuada = false;  // OLED al mínimo por inactividad (pantalla del pomodoro)
 static uint8_t fallosPin = 0;
 static uint32_t esperaPinHastaMs = 0;
+static bool aceptarTrasPin = false;    // pregunta del PC aceptada con el Ardutype bloqueado
+static uint32_t notiDespertoMs = 0;    // una notificación encendió el OLED (no cuenta para el bloqueo)
 
 static Pantalla *cima() {
   return pila[numPila - 1];
@@ -1553,6 +1556,10 @@ static void entrarAlMenu() {
   fallosPin = 0;
   Serial.println("Desbloqueado");
   ledOk();
+  if (aceptarTrasPin) {  // el PIN era para aceptar una pregunta del PC
+    aceptarTrasPin = false;
+    notiResponder(true);
+  }
   uiRaiz(&menu);
 }
 
@@ -1853,6 +1860,166 @@ class Arranque : public Pantalla {
 };
 static Arranque arranque;
 
+// ---- Notificaciones del PC (notificacion.h) ----
+
+static bool enPila(Pantalla *p) {
+  for (int i = 0; i < numPila; i++)
+    if (pila[i] == p) return true;
+  return false;
+}
+
+static void quitarDePila(Pantalla *p) {
+  for (int i = 1; i < numPila; i++) {  // nunca la raíz
+    if (pila[i] != p) continue;
+    memmove(&pila[i], &pila[i + 1], (numPila - i - 1) * sizeof(pila[0]));
+    numPila--;
+    if (i == numPila) cima()->volver();
+    sucio = true;
+    return;
+  }
+}
+
+//
+// Se ponen encima de lo que haya, salvo que se esté tecleando (la cuenta atrás
+// seguiría a ciegas al volver) o en pantallas que no deben cortarse.
+// Texto: arriba/abajo lo desplazan. Aviso: cualquier otra tecla lo quita.
+// Pregunta: izquierda deniega; centro o derecha llevan a «No / Sí» (No
+// primero). Aceptar con el Ardutype bloqueado pide antes el PIN.
+
+class PantallaNoti : public Pantalla {
+  int fila = 0;  // primera fila del texto a la vista
+  bool opciones = false;
+  int sel = 0;
+  uint32_t mostradaMs = 0;
+  int ultimoSegundo = -1;
+
+  int numFilas() {
+    int n = utf8Contar(notiTexto());
+    return max(1, (n + CARACTERES_FILA - 1) / CARACTERES_FILA);
+  }
+
+  void aceptar() {
+    if (bovedaEstado() == BOVEDA_ABIERTA) return notiResponder(true);
+    if ((int32_t)(esperaPinHastaMs - millis()) > 0) return fallo("Espera para el PIN");
+    // Si se estaba metiendo el PIN cuando llegó, esa pantalla sobra: una sola en la pila
+    if (enPila(&pantallaPin)) quitarDePila(&pantallaPin);
+    aceptarTrasPin = true;
+    pedirPin();
+  }
+
+ public:
+  void entrar() override {
+    fila = 0;
+    opciones = false;
+    sel = 0;
+    mostradaMs = millis();
+  }
+
+  void volver() override {  // tras cancelar el PIN: la pregunta sigue sin contestar
+    aceptarTrasPin = false;
+    opciones = false;
+    sel = 0;
+  }
+
+  void tecla(Tecla t) override {
+    if (millis() - mostradaMs < NOTI_IGNORAR_TECLAS_MS) return;
+    bool pregunta = notiTipo() == NOTI_PREGUNTA;
+    if (opciones) {
+      if (t == ARRIBA || t == ABAJO) sel ^= 1;
+      else if (t == IZQUIERDA) opciones = false;
+      else if (t == CENTRO || t == DERECHA) sel ? aceptar() : notiResponder(false);
+      return;
+    }
+    switch (t) {
+      case ARRIBA:
+        if (fila > 0) fila--;
+        break;
+      case ABAJO:
+        if (fila + 2 < numFilas()) fila++;
+        break;
+      case IZQUIERDA:
+        pregunta ? notiResponder(false) : notiDescartar();
+        break;
+      case CENTRO:
+      case DERECHA:
+        if (pregunta) opciones = true;
+        else notiDescartar();
+        break;
+      default:  // el centro largo no bloquea aquí
+        break;
+    }
+  }
+
+  void tick() override {
+    int s = (notiRestanteMs() + 999) / 1000;
+    if (s != ultimoSegundo) {
+      ultimoSegundo = s;
+      sucio = true;
+    }
+  }
+
+  void dibujar() override {
+    char derecha[40] = "";
+    bool pregunta = notiTipo() == NOTI_PREGUNTA;
+    if (opciones) {
+      snprintf(derecha, sizeof(derecha), "%ds", ultimoSegundo);
+      pantallaCabecera("¿Aceptar?", derecha);
+      pantallaFila(0, "No", sel == 0);
+      pantallaFila(1, bovedaEstado() == BOVEDA_ABIERTA ? "Sí" : "Sí (pide PIN)", sel == 1);
+      return;
+    }
+    int n = numFilas();
+    char pagina[24] = "";
+    if (n > 2) snprintf(pagina, sizeof(pagina), "%c%d/%d", fila + 2 < n ? 'v' : ' ', fila + 1, n - 1);
+    if (pregunta) snprintf(derecha, sizeof(derecha), "%s %ds", pagina, ultimoSegundo);
+    else snprintf(derecha, sizeof(derecha), "%s", pagina);
+    pantallaCabecera(notiOrigen(), derecha);
+    char tramo[CARACTERES_FILA * 3 + 1];
+    for (int f = 0; f < 2 && fila + f < n; f++) {
+      utf8Tramo(notiTexto(), (fila + f) * CARACTERES_FILA, CARACTERES_FILA, tramo, sizeof(tramo));
+      pantallaFila(f, tramo, false);
+    }
+  }
+};
+static PantallaNoti pantallaNoti;
+static uint32_t notiAtendida = 0;  // número de la última notificación que ha visto la interfaz
+
+static bool puedeMostrarNoti() {
+  EstadoBoveda e = bovedaEstado();
+  if (e != BOVEDA_CERRADA && e != BOVEDA_ABIERTA) return false;
+  if (pila[0] == &arranque || pila[0] == &pantallaPc || pila[0] == &verRecuperacion) return false;
+  return cima() != &tecleo;
+}
+
+static void despertarPorNoti() {
+  if (atenuada) {
+    atenuada = false;
+    pantallaContraste(CONTRASTES[aj().brillo]);
+  }
+  if (!pantallaEncendida()) {
+    pantallaEncender(true);
+    ledReposo(false);
+  }
+  avisoActivo = false;
+  notiDespertoMs = millis();
+  sucio = true;
+}
+
+static void sincronizarNoti() {
+  if (notiTipo() == NOTI_NINGUNA) {
+    aceptarTrasPin = false;
+    if (enPila(&pantallaNoti)) quitarDePila(&pantallaNoti);
+    return;
+  }
+  if (notiNumero() != notiAtendida) {  // ha llegado una nueva
+    notiAtendida = notiNumero();
+    if (enPila(&pantallaNoti)) quitarDePila(&pantallaNoti);
+    despertarPorNoti();
+  }
+  if (aceptarTrasPin && !enPila(&pantallaPin)) aceptarTrasPin = false;  // PIN cancelado o fallido
+  if (!aceptarTrasPin && !enPila(&pantallaNoti) && puedeMostrarNoti()) uiPush(&pantallaNoti);
+}
+
 // ---- Bucle ----
 
 void uiIniciar() {
@@ -1889,6 +2056,7 @@ void uiTick() {
     cima()->tecla(t);
     sucio = true;
   }
+  sincronizarNoti();
   cima()->tick();
 
   if (avisoActivo && (int32_t)(ahora - avisoHastaMs) >= 0) {
@@ -1908,8 +2076,10 @@ void uiTick() {
       ledReposo(true);
     }
   }
+  // Una notificación enciende el OLED un rato, pero no retrasa el bloqueo
+  uint32_t actividadMs = (int32_t)(notiDespertoMs - ultimaTeclaMs) > 0 ? notiDespertoMs : ultimaTeclaMs;
   if (pantallaEncendida() && !atenuada && cima()->apagable() &&
-      ahora - ultimaTeclaMs >= APAGAR_PANTALLA_MS) {
+      ahora - actividadMs >= APAGAR_PANTALLA_MS) {
     if (cima()->atenuable()) {
       atenuada = true;
       pantallaContraste(CONTRASTES[0]);

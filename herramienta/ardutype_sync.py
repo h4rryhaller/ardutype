@@ -123,7 +123,8 @@ def validar_guion(texto):
 
 class Ardutype:
     def __init__(self, puerto):
-        self.serie = serial.Serial(puerto, 115200, timeout=0.5)
+        # exclusive: flock del puerto, el mismo que respeta notificar.py
+        self.serie = serial.Serial(puerto, 115200, timeout=0.5, exclusive=True)
         time.sleep(0.2)
         self.serie.reset_input_buffer()
 

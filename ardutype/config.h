@@ -74,4 +74,14 @@ const uint32_t MANTENER_INTERVALO_MS = 30000;
 // ---- Administración desde el PC ----
 const uint32_t SESION_PC_MS = 60000;         // sin órdenes, se cierra la pantalla del PC
 
+// ---- Notificaciones del PC (notificacion.h) ----
+const uint16_t NOTI_PITIDO_HZ = 2800;            // más agudo que el del pomodoro
+const uint16_t NOTI_PITIDO_MS = 150;
+const uint32_t NOTI_REPETIR_PITIDO_MS = 30000;   // pregunta sin contestar: pitido cada 30 s
+const uint32_t NOTI_MAX_SEGUNDOS = 3600;         // plazo máximo de una pregunta
+const uint32_t NOTI_CADUCA_AVISO_MS = 8 * 3600000UL; // un aviso sin ver se quita solo
+const uint32_t NOTI_SIN_PUERTO_MS = 2000;        // puerto cerrado tanto rato: pregunta retirada
+const uint32_t NOTI_IGNORAR_TECLAS_MS = 600;     // al aparecer, sin teclas por inercia
+const uint32_t COLOR_NOTI = 0xA000FF;            // violeta
+
 #endif

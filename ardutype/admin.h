@@ -24,7 +24,15 @@
 //   ADIOS                   -> @OK
 //   Cualquier fallo         -> @ERR <motivo>
 //
-// Todo menos HOLA exige el Ardutype desbloqueado, y abre en él la pantalla
+// Notificaciones (notificacion.h), también con el Ardutype bloqueado:
+//   AVISO <origen> <texto>                    -> @OK
+//   PREGUNTA <id> <segundos> <origen> <texto> -> @OK, y al contestar o vencer
+//                                                el plazo @RESPUESTA <id> SI|NO|TIEMPO
+//   RETIRAR <id>                              -> @OK  (el PC ya no espera respuesta)
+//   Sin respuesta si se cierra el puerto. «@ERR ocupado» si ya hay una
+//   pregunta o se está sincronizando.
+//
+// Todo menos HOLA y las notificaciones exige el Ardutype desbloqueado, y abre en él la pantalla
 // «PC conectado». Nada que lleve contraseñas sale ni entra sin confirmarlo en
 // el dispositivo. ENVIAR se rechaza mientras haya cambios del dispositivo sin
 // recoger, para que la lista de KeePassXC no los pise.

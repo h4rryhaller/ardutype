@@ -4,6 +4,7 @@
 #include "cripto.h"
 #include "led.h"
 #include "ui.h"
+#include "notificacion.h"
 #include "admin.h"
 
 static const size_t MAX_LINEA = 1200;  // SERV con todos los campos al máximo (el guion manda)
@@ -291,6 +292,37 @@ static void terminarRecepcion() {
   uiPcPreguntar(pregunta, "Sí, aplicar", alResponderCambios);
 }
 
+// ---- Notificaciones (notificacion.h) ----
+
+static bool leerNumero(const char *s, uint32_t &valor, uint32_t maximo) {
+  char *fin;
+  unsigned long v = strtoul(s, &fin, 10);
+  if (!*s || *fin || v > maximo) return false;
+  valor = v;
+  return true;
+}
+
+// AVISO <origen> <texto> | PREGUNTA <id> <segundos> <origen> <texto> | RETIRAR <id>
+static void ordenNotificacion(char **p, int n) {
+  if (bovedaEstado() != BOVEDA_CERRADA && bovedaEstado() != BOVEDA_ABIERTA) return error("estado");
+  if (sesion != INACTIVA) return error("ocupado");  // sincronizando
+  const char *orden = p[0];
+  uint32_t id, segundos;
+  if (!strcmp(orden, "RETIRAR")) {
+    if (n != 2 || !leerNumero(p[1], id, UINT32_MAX)) return error("campos");
+    return notiRetirar(id) ? responder("OK") : error("id");
+  }
+  bool pregunta = !strcmp(orden, "PREGUNTA");
+  if (n != (pregunta ? 5 : 3)) return error("campos");
+  if (pregunta && (!leerNumero(p[1], id, UINT32_MAX) || !leerNumero(p[2], segundos, NOTI_MAX_SEGUNDOS) || !segundos))
+    return error("campos");
+  char origen[LARGO_ORIGEN_NOTI], texto[LARGO_TEXTO_NOTI];
+  if (!leerTextoHex(p[n - 2], origen, sizeof(origen), false) || !leerTextoHex(p[n - 1], texto, sizeof(texto), false))
+    return error("texto");
+  bool ok = pregunta ? notiPreguntar(id, segundos, origen, texto) : notiAvisar(origen, texto);
+  ok ? responder("OK") : error("ocupado");
+}
+
 // ---- Órdenes ----
 
 static const char *nombreEstado() {
@@ -317,6 +349,8 @@ static void procesar(char *texto) {
     if (sesion != INACTIVA) terminar();
     return responder("OK");
   }
+  if (!strcmp(orden, "AVISO") || !strcmp(orden, "PREGUNTA") || !strcmp(orden, "RETIRAR"))
+    return ordenNotificacion(p, n);
   if (bovedaEstado() != BOVEDA_ABIERTA) return error("bloqueado");
   if (sesion == PREGUNTANDO_ENVIO || sesion == PREGUNTANDO_CAMBIOS) return error("ocupado");
   if (sesion == INACTIVA) {

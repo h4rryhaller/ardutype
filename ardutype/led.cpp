@@ -9,6 +9,7 @@ static bool tecleando = false;
 static bool reposo = false;
 static uint32_t colorPomodoro = 0;
 static ModoLedPomodoro modoPomodoro = LED_POMO_NADA;
+static ModoLedNoti modoNoti = LED_NOTI_NADA;
 
 // Destello en curso: color, número de encendidos y duración de cada fase
 static uint32_t colorDestello = 0;
@@ -62,6 +63,9 @@ void ledTick() {
     uint32_t t = ahora % 2000;
     uint8_t nivel = 40 + (t < 1000 ? t : 2000 - t) * 215 / 1000;
     color = escalar(255 * nivel / 255, 120 * nivel / 255, 0);
+  } else if (modoNoti != LED_NOTI_NADA) {
+    bool encendido = modoNoti == LED_NOTI_LENTO ? ahora % 2000 < 1000 : ahora % 500 < 250;
+    if (encendido) color = escalar(COLOR_NOTI >> 16, (uint8_t)(COLOR_NOTI >> 8), (uint8_t)COLOR_NOTI);
   } else if (modoPomodoro != LED_POMO_NADA) {
     // Pausa: 1 s encendido y 1 s apagado. Terminado: 2 veces por segundo
     bool encendido = modoPomodoro == LED_POMO_FIJO ||
@@ -114,4 +118,8 @@ void ledReposo(bool si) {
 void ledPomodoro(uint32_t rgb, ModoLedPomodoro modo) {
   colorPomodoro = rgb;
   modoPomodoro = modo;
+}
+
+void ledNotificacion(ModoLedNoti modo) {
+  modoNoti = modo;
 }

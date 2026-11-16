@@ -364,6 +364,13 @@ Con esto, sincronizar con KeePassXC antes de subir ya no es imprescindible: solo
     - **PoC:** clase `RuedaPalabras` en `ui.cpp`, antes accesible en Ajustes → «PoC frase», que tecleaba la frase por USB; **quitada al pasar a producción (2026-11-14)**, la clase queda solo para la clave de recuperación. Cabe de sobra en flash (RP2040, 8 MB). **No reduce la entropía** (sigues eligiendo tus palabras); solo baja los toques frente a teclear ~20 caracteres.
     - **Alternativa:** 2 palabras por prefijo (2388, 11,2 bits) si se quieren menos palabras, a cambio de un toque para elegir entre 2. Descartada la lista EFF inglesa.
     - **Pendiente (pantalla real):** que la frase alimente la derivación (PBKDF2 → bóveda) en vez de teclearse, con mínimo de palabras / aviso de bits, enganchada al desbloqueo; se verá junto al ATECC608.
+- **Más usos de las notificaciones (ideas, 2026-11-16; ver fase 11).** Todo con `avisar` / `preguntar`, sin tocar el firmware salvo que se diga:
+  - **Tareas largas:** `make; avisar "Compilado"`, o un alias `hecho` que avise al terminar cualquier comando: con pitido si falla, mudo (solo LED) si va bien.
+  - **Confirmaciones en scripts:** `preguntar "¿Restaurar la bóveda?" && ./restaurar.sh`; antes de un `git push --force` o un `rm -r` grande.
+  - **Avisos del sistema:** conflictos de Syncthing (p. ej. en la base de KeePassXC), un respaldo de cron que falla, disco casi lleno, un `ssh` entrante al PC.
+  - **Calendario y tiempo:** recordatorios de reuniones; fin del pomodoro del PC (el aparato ya tiene el suyo, fase 9).
+  - **Claude Code:** avisar cuando termina un agente en segundo plano (`agent_completed`, ahora se ignora); que el aviso de «he terminado» diga en pantalla qué ha terminado.
+  - **`sudo` con confirmación en el aparato, con cuidado:** es comodidad, no seguridad (fase 11), así que solo como un paso más, nunca en lugar de la contraseña.
 
 ## 11. Preguntas abiertas
 

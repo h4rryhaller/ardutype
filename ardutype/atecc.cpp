@@ -24,6 +24,8 @@ enum : uint8_t {
   OP_BLOQUEAR = 0x17,
   OP_ALEATORIO = 0x1B,
   OP_CONTADOR = 0x24,
+  OP_GENKEY = 0x40,
+  OP_FIRMAR = 0x41,
 };
 // Zonas en p1 de leer/escribir; 0x80 = 32 bytes en vez de 4
 enum : uint8_t { ZONA_CONFIG = 0x00, ZONA_DATOS = 0x02, ZONA_32 = 0x80 };
@@ -385,6 +387,33 @@ bool ateccAleatorio(uint8_t salida[TAM_ATECC]) {
 bool ateccOrdenCruda(uint8_t op, uint8_t p1, uint16_t p2, const uint8_t *datos, size_t largoDatos,
                      uint8_t *salida, size_t largoSalida) {
   bool ok = orden(op, p1, p2, datos, largoDatos, salida, largoSalida);
+  dormir();
+  return ok;
+}
+
+// ---- Claves P-256 (agente SSH) ----
+
+bool ateccClavePublica(uint8_t ranura, uint8_t pub[64]) {
+  if (estado != ATECC_LISTO) return false;
+  bool ok = orden(OP_GENKEY, 0x00, ranura, nullptr, 0, pub, 64);  // modo 0: solo calcula
+  dormir();
+  return ok;
+}
+
+bool ateccGenerarClave(uint8_t ranura, uint8_t pub[64]) {
+  if (estado != ATECC_LISTO) return false;
+  bool ok = orden(OP_GENKEY, 0x04, ranura, nullptr, 0, pub, 64);  // modo 4: privada nueva
+  dormir();
+  return ok;
+}
+
+// Nonce en modo «pass-through» deja el resumen en TempKey; Sign en modo
+// externo (0x80) lo firma. Las dos en la misma sesión: TempKey no sobrevive al sueño.
+bool ateccFirmar(uint8_t ranura, const uint8_t resumen[32], uint8_t firma[64]) {
+  if (estado != ATECC_LISTO) return false;
+  sesion(true);
+  bool ok = orden(OP_NONCE, 0x03, 0x0000, resumen, 32, nullptr, 0) &&
+            orden(OP_FIRMAR, 0x80, ranura, nullptr, 0, firma, 64);
   dormir();
   return ok;
 }

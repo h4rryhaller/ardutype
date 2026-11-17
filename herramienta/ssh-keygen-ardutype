@@ -1,0 +1,4 @@
+#!/bin/sh
+# ssh-keygen con el agente del Ardutype: para git (gpg.ssh.program), que firma
+# con «ssh-keygen -Y sign -f <pública>» y busca la privada en SSH_AUTH_SOCK.
+SSH_AUTH_SOCK="${XDG_RUNTIME_DIR:-/tmp/ardutype-$(id -u)}/ardutype-ssh.sock" exec ssh-keygen "$@"

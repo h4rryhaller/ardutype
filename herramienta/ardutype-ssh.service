@@ -1,0 +1,12 @@
+# Agente SSH del Ardutype. Instalar:
+#   ln -s <ruta>/ardutype-ssh.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now ardutype-ssh
+[Unit]
+Description=Agente SSH con la clave en el Ardutype
+
+[Service]
+ExecStart=%h/.local/bin/ardutype-ssh agente
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

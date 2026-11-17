@@ -48,6 +48,18 @@ bool ateccSubirLimite(const uint8_t claveAdmin[TAM_ATECC], uint32_t minimo);
 // 32 bytes del generador del chip (con la configuración sin bloquear da un patrón fijo)
 bool ateccAleatorio(uint8_t salida[TAM_ATECC]);
 
+// Claves P-256 en las ranuras 0-2 (configuración de fábrica: firma de mensajes
+// externos y GenKey permitidos). La privada nunca sale del chip. OJO: la
+// configuración ya bloqueada no exige autorización para usarlas: el PIN lo pide
+// solo el firmware (ver «Agente SSH» en Ardutype_diseno.md).
+const uint8_t RANURA_SSH = 0;
+// La pública de la clave que haya; false si la ranura no tiene ninguna
+bool ateccClavePublica(uint8_t ranura, uint8_t pub[64]);
+// Crea una privada nueva (sustituye a la anterior, que se pierde) y da su pública
+bool ateccGenerarClave(uint8_t ranura, uint8_t pub[64]);
+// ECDSA P-256 sobre un resumen SHA-256 ya calculado: firma = r || s (big-endian)
+bool ateccFirmar(uint8_t ranura, const uint8_t resumen[32], uint8_t firma[64]);
+
 // Para las pruebas: una orden cualquiera y el último código de estado del chip
 bool ateccOrdenCruda(uint8_t op, uint8_t p1, uint16_t p2, const uint8_t *datos, size_t largoDatos,
                      uint8_t *salida, size_t largoSalida);

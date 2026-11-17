@@ -7,6 +7,8 @@
 #include "notificacion.h"
 #include "guion.h"
 #include "muerto.h"
+#include "atecc.h"
+#include "zumbador.h"
 #include "admin.h"
 
 static const size_t MAX_LINEA = 1200;  // SERV con todos los campos al máximo (el guion manda)
@@ -24,8 +26,15 @@ enum EstadoSesion : uint8_t {
   RECIBIENDO,           // llegan las entradas de KeePassXC
   PREGUNTANDO_CAMBIOS,  // ¿aplicar lo que ha llegado?
   PREGUNTANDO_MUERTO,   // ¿guardar el guion del hombre muerto?
+  PREGUNTANDO_CLAVE,    // ¿crear (o sustituir) la clave SSH?
+  PREGUNTANDO_FIRMA,    // ¿firmar lo que pide el agente SSH?
 };
 static EstadoSesion sesion = INACTIVA;
+
+static bool preguntando() {
+  return sesion == PREGUNTANDO_ENVIO || sesion == PREGUNTANDO_CAMBIOS || sesion == PREGUNTANDO_MUERTO ||
+         sesion == PREGUNTANDO_CLAVE || sesion == PREGUNTANDO_FIRMA;
+}
 static uint32_t ultimaOrdenMs = 0;
 
 // Lo que llega de KeePassXC, hasta que se confirma. Los guiones van en un
@@ -121,8 +130,7 @@ static void terminar() {
 }
 
 void adminCancelar() {
-  if (sesion == PREGUNTANDO_ENVIO || sesion == PREGUNTANDO_CAMBIOS || sesion == PREGUNTANDO_MUERTO)
-    error("cancelado");
+  if (preguntando()) error("cancelado");
   borrarEntrantes();
   sesion = INACTIVA;
 }
@@ -339,6 +347,86 @@ static void ordenMuerto(char **p, int n) {
   uiPcPreguntar(pregunta, lineas ? "Sí, guardar" : "Sí, borrar", alResponderMuerto);
 }
 
+// ---- Agente SSH (herramienta/agente_ssh.py) ----
+//
+// La clave P-256 vive en la ranura RANURA_SSH del ATECC y nunca sale de él.
+//   SSHPUB                  -> @SSHPUB <pública, 64 bytes X||Y> | @ERR sinclave
+//                              (también bloqueado: la pública no es secreta)
+//   SSHGENERAR              -> confirmación -> @SSHPUB <pública>
+//   SSHFIRMAR <resumen> <motivo>
+//                           -> confirmación -> @FIRMA <r||s, 64 bytes>
+// El resumen es el SHA-256 de lo que hay que firmar (lo calcula el PC: el
+// Ardutype firma a ciegas); el motivo, un texto corto para la pregunta.
+
+static uint8_t resumenSsh[32];
+
+static void escribirPublica(const uint8_t pub[64]) {
+  Serial.print("@SSHPUB ");
+  escribirHex(pub, 64);
+  Serial.println();
+}
+
+static void ordenSshPub() {
+  uint8_t pub[64];
+  if (!ateccClavePublica(RANURA_SSH, pub)) return error(ateccEstado() == ATECC_LISTO ? "sinclave" : "atecc");
+  escribirPublica(pub);
+}
+
+static void alResponderClave(bool si) {
+  sesion = ESPERANDO;
+  if (!si) {
+    uiPcTexto("Clave no creada");
+    return error("cancelado");
+  }
+  uiPcTexto("Creando clave...");
+  uint8_t pub[64];
+  if (!ateccGenerarClave(RANURA_SSH, pub)) {
+    uiPcTexto("Error del chip");
+    return error("atecc");
+  }
+  uiPcTexto("Clave SSH creada");
+  escribirPublica(pub);
+}
+
+static void ordenSshGenerar() {
+  uint8_t pub[64];
+  bool hay = ateccClavePublica(RANURA_SSH, pub);
+  sesion = PREGUNTANDO_CLAVE;
+  uiPcPreguntar(hay ? "¿Sustituir clave SSH?" : "¿Crear clave SSH?", hay ? "Sí, sustituir" : "Sí, crear",
+                alResponderClave);
+}
+
+static void alResponderFirma(bool si) {
+  sesion = ESPERANDO;
+  if (!si) {
+    criptoBorrar(resumenSsh, sizeof(resumenSsh));
+    uiPcTexto("Firma rechazada");
+    return error("cancelado");
+  }
+  uint8_t firma[64];
+  bool ok = ateccFirmar(RANURA_SSH, resumenSsh, firma);
+  criptoBorrar(resumenSsh, sizeof(resumenSsh));
+  if (!ok) {
+    uiPcTexto("Error al firmar");
+    return error("atecc");
+  }
+  uiPcTexto("Firmado");
+  Serial.print("@FIRMA ");
+  escribirHex(firma, sizeof(firma));
+  Serial.println();
+}
+
+static void ordenSshFirmar(char **p, int n) {
+  char motivo[20];
+  if (n != 3 || leerHex(p[1], resumenSsh, sizeof(resumenSsh)) != (int)sizeof(resumenSsh) ||
+      !leerTextoHex(p[2], motivo, sizeof(motivo), false))
+    return error("campos");
+  snprintf(pregunta, sizeof(pregunta), "¿%s?", motivo);
+  sesion = PREGUNTANDO_FIRMA;
+  uiPcPreguntar(pregunta, "Sí, firmar", alResponderFirma);
+  zumbadorPitido(NOTI_PITIDO_HZ, NOTI_PITIDO_MS);  // puede estar mirando a otra parte
+}
+
 // ---- Notificaciones (notificacion.h) ----
 
 static bool leerNumero(const char *s, uint32_t &valor, uint32_t maximo) {
@@ -389,6 +477,38 @@ static const char *nombreEstado() {
   }
 }
 
+// Solo lectura, para estudiar el chip (herramienta/atecc_ranuras.py):
+//   ATECC       -> @ATECC <zona de configuración, 128 bytes>
+//   ATECCPUB n  -> @ATECCPUB <clave pública de la ranura n, 64 bytes>
+// GenKey en modo 0 solo calcula la pública de la privada que ya hay: no escribe.
+// La configuración la puede leer cualquiera que tenga el chip: no hace falta la bóveda.
+static void ordenAtecc(char **p, int n) {
+  if (ateccEstado() == ATECC_AUSENTE) return error("atecc");
+  char codigo[16];
+  if (!strcmp(p[0], "ATECC")) {
+    uint8_t cfg[128];
+    for (uint8_t b = 0; b < 4; b++)
+      if (!ateccOrdenCruda(0x02, 0x80, b << 3, nullptr, 0, cfg + 32 * b, 32)) {
+        snprintf(codigo, sizeof(codigo), "atecc %02x", ateccUltimoEstado());
+        return error(codigo);
+      }
+    Serial.print("@ATECC ");
+    escribirHex(cfg, sizeof(cfg));
+    Serial.println();
+    return;
+  }
+  int ranura = n == 2 ? atoi(p[1]) : -1;
+  if (ranura < 0 || ranura > 15) return error("orden");
+  uint8_t pub[64];
+  if (!ateccOrdenCruda(0x40, 0x00, ranura, nullptr, 0, pub, sizeof(pub))) {
+    snprintf(codigo, sizeof(codigo), "atecc %02x", ateccUltimoEstado());
+    return error(codigo);
+  }
+  Serial.print("@ATECCPUB ");
+  escribirHex(pub, sizeof(pub));
+  Serial.println();
+}
+
 static void procesar(char *texto) {
   char *p[MAX_PALABRAS];
   int n = 0;
@@ -407,9 +527,10 @@ static void procesar(char *texto) {
   if (!strcmp(orden, "AVISO") || !strcmp(orden, "PREGUNTA") || !strcmp(orden, "RETIRAR") ||
       !strcmp(orden, "QUITAR"))
     return ordenNotificacion(p, n);
+  if (!strcmp(orden, "ATECC") || !strcmp(orden, "ATECCPUB")) return ordenAtecc(p, n);
+  if (!strcmp(orden, "SSHPUB")) return ordenSshPub();
   if (bovedaEstado() != BOVEDA_ABIERTA) return error("bloqueado");
-  if (sesion == PREGUNTANDO_ENVIO || sesion == PREGUNTANDO_CAMBIOS || sesion == PREGUNTANDO_MUERTO)
-    return error("ocupado");
+  if (preguntando()) return error("ocupado");
   if (sesion == INACTIVA) {
     if (!uiPcAbrir()) return error("ocupado");  // a medias de algo que no se puede cortar
     sesion = ESPERANDO;
@@ -454,6 +575,12 @@ static void procesar(char *texto) {
   } else if (!strcmp(orden, "MUERTO")) {
     if (sesion == RECIBIENDO) return error("orden");
     ordenMuerto(p, n);
+  } else if (!strcmp(orden, "SSHGENERAR")) {
+    if (sesion == RECIBIENDO) return error("orden");
+    ordenSshGenerar();
+  } else if (!strcmp(orden, "SSHFIRMAR")) {
+    if (sesion == RECIBIENDO) return error("orden");
+    ordenSshFirmar(p, n);
   } else {
     error("orden");
   }
@@ -480,6 +607,5 @@ void adminTick() {
   }
 
   // Si el PC desaparece a medias, la sesión caduca (no mientras se pregunta)
-  bool preguntando = sesion == PREGUNTANDO_ENVIO || sesion == PREGUNTANDO_CAMBIOS || sesion == PREGUNTANDO_MUERTO;
-  if (sesion != INACTIVA && !preguntando && millis() - ultimaOrdenMs >= SESION_PC_MS) terminar();
+  if (sesion != INACTIVA && !preguntando() && millis() - ultimaOrdenMs >= SESION_PC_MS) terminar();
 }

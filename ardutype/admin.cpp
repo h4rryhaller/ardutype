@@ -11,7 +11,11 @@
 #include "zumbador.h"
 #include "admin.h"
 
-static const size_t MAX_LINEA = 1200;  // SERV con todos los campos al máximo (el guion manda)
+// La orden más larga: SERV con todos los campos al máximo, en hex (2 caracteres
+// por byte, sin el 0 final) y separados por espacios. Antes era 1200 fijo y un
+// guion de más de ~500 bytes desbordaba la línea («@ERR largo», 2026-11-17).
+static const size_t MAX_LINEA = 4 + 1 + 2 * TAM_UUID + 2 * (1 + 2 * (LARGO_NOMBRE - 1)) +
+                                2 * (1 + 2 * (LARGO_CAMPO - 1)) + 1 + 2 * (LARGO_GUION - 1) + 16;
 static const int MAX_PALABRAS = 8;
 
 static char linea[MAX_LINEA];

@@ -28,12 +28,13 @@ enum EstadoSesion : uint8_t {
   PREGUNTANDO_MUERTO,   // ¿guardar el guion del hombre muerto?
   PREGUNTANDO_CLAVE,    // ¿crear (o sustituir) la clave SSH?
   PREGUNTANDO_FIRMA,    // ¿firmar lo que pide el agente SSH?
+  PREGUNTANDO_ECDH,     // ¿descifrar (ECDH) lo que pide el PC?
 };
 static EstadoSesion sesion = INACTIVA;
 
 static bool preguntando() {
   return sesion == PREGUNTANDO_ENVIO || sesion == PREGUNTANDO_CAMBIOS || sesion == PREGUNTANDO_MUERTO ||
-         sesion == PREGUNTANDO_CLAVE || sesion == PREGUNTANDO_FIRMA;
+         sesion == PREGUNTANDO_CLAVE || sesion == PREGUNTANDO_FIRMA || sesion == PREGUNTANDO_ECDH;
 }
 static uint32_t ultimaOrdenMs = 0;
 
@@ -352,7 +353,7 @@ static void ordenMuerto(char **p, int n) {
 // La clave P-256 vive en la ranura RANURA_SSH del ATECC y nunca sale de él.
 //   SSHPUB                  -> @SSHPUB <pública, 64 bytes X||Y> | @ERR sinclave
 //                              (también bloqueado: la pública no es secreta)
-//   SSHGENERAR              -> confirmación -> @SSHPUB <pública>
+//   SSHGENERAR              -> confirmación -> @SSHPUB <pública>  (CIFPUB/CIFGENERAR: cifrado)
 //   SSHFIRMAR <resumen> <motivo>
 //                           -> confirmación -> @FIRMA <r||s, 64 bytes>
 // El resumen es el SHA-256 de lo que hay que firmar (lo calcula el PC: el
@@ -360,16 +361,18 @@ static void ordenMuerto(char **p, int n) {
 
 static uint8_t resumenSsh[32];
 
-static void escribirPublica(const uint8_t pub[64]) {
-  Serial.print("@SSHPUB ");
+static uint8_t ranuraClave = RANURA_SSH;  // la que se va a crear
+
+static void escribirPublica(uint8_t ranura, const uint8_t pub[64]) {
+  Serial.print(ranura == RANURA_SSH ? "@SSHPUB " : "@CIFPUB ");
   escribirHex(pub, 64);
   Serial.println();
 }
 
-static void ordenSshPub() {
+static void ordenClavePub(uint8_t ranura) {
   uint8_t pub[64];
-  if (!ateccClavePublica(RANURA_SSH, pub)) return error(ateccEstado() == ATECC_LISTO ? "sinclave" : "atecc");
-  escribirPublica(pub);
+  if (!ateccClavePublica(ranura, pub)) return error(ateccEstado() == ATECC_LISTO ? "sinclave" : "atecc");
+  escribirPublica(ranura, pub);
 }
 
 static void alResponderClave(bool si) {
@@ -380,20 +383,25 @@ static void alResponderClave(bool si) {
   }
   uiPcTexto("Creando clave...");
   uint8_t pub[64];
-  if (!ateccGenerarClave(RANURA_SSH, pub)) {
+  if (!ateccGenerarClave(ranuraClave, pub)) {
     uiPcTexto("Error del chip");
     return error("atecc");
   }
-  uiPcTexto("Clave SSH creada");
-  escribirPublica(pub);
+  uiPcTexto(ranuraClave == RANURA_SSH ? "Clave SSH creada" : "Clave de cifrado creada");
+  escribirPublica(ranuraClave, pub);
 }
 
-static void ordenSshGenerar() {
+static void ordenGenerar(uint8_t ranura) {
   uint8_t pub[64];
-  bool hay = ateccClavePublica(RANURA_SSH, pub);
+  bool hay = ateccClavePublica(ranura, pub);
+  ranuraClave = ranura;
   sesion = PREGUNTANDO_CLAVE;
-  uiPcPreguntar(hay ? "¿Sustituir clave SSH?" : "¿Crear clave SSH?", hay ? "Sí, sustituir" : "Sí, crear",
-                alResponderClave);
+  if (ranura == RANURA_SSH)
+    uiPcPreguntar(hay ? "¿Sustituir clave SSH?" : "¿Crear clave SSH?", hay ? "Sí, sustituir" : "Sí, crear",
+                  alResponderClave);
+  else  // sustituirla deja sin poder descifrar lo cifrado con la anterior
+    uiPcPreguntar(hay ? "¿Sustituir cifrado?" : "¿Crear cifrado?", hay ? "Sí, sustituir" : "Sí, crear",
+                  alResponderClave);
 }
 
 static void alResponderFirma(bool si) {
@@ -425,6 +433,46 @@ static void ordenSshFirmar(char **p, int n) {
   sesion = PREGUNTANDO_FIRMA;
   uiPcPreguntar(pregunta, "Sí, firmar", alResponderFirma);
   zumbadorPitido(NOTI_PITIDO_HZ, NOTI_PITIDO_MS);  // puede estar mirando a otra parte
+}
+
+// ---- Cifrado (herramienta/age_plugin_ardutype.py) ----
+//
+//   CIFPUB                 -> @CIFPUB <pública de RANURA_CIFRADO> | @ERR sinclave
+//   CIFGENERAR             -> confirmación -> @CIFPUB <pública>
+//   ECDH <pública> <motivo> -> confirmación -> @ECDH <secreto, 32 bytes>
+// El secreto sale en claro hacia el PC (que deriva la clave del archivo): como
+// la firma, protege que nada se descifre sin confirmarlo y que la privada no salga.
+
+static uint8_t ajenaEcdh[64];
+
+static void alResponderEcdh(bool si) {
+  sesion = ESPERANDO;
+  if (!si) {
+    uiPcTexto("Descifrado rechazado");
+    return error("cancelado");
+  }
+  uint8_t secreto[32];
+  bool ok = ateccEcdh(ajenaEcdh, secreto);
+  if (!ok) {
+    uiPcTexto("Error del chip");
+    return error("atecc");
+  }
+  uiPcTexto("Descifrado");
+  Serial.print("@ECDH ");
+  escribirHex(secreto, sizeof(secreto));
+  Serial.println();
+  criptoBorrar(secreto, sizeof(secreto));
+}
+
+static void ordenEcdh(char **p, int n) {
+  char motivo[20];
+  if (n != 3 || leerHex(p[1], ajenaEcdh, sizeof(ajenaEcdh)) != (int)sizeof(ajenaEcdh) ||
+      !leerTextoHex(p[2], motivo, sizeof(motivo), false))
+    return error("campos");
+  snprintf(pregunta, sizeof(pregunta), "¿%s?", motivo);
+  sesion = PREGUNTANDO_ECDH;
+  uiPcPreguntar(pregunta, "Sí, descifrar", alResponderEcdh);
+  zumbadorPitido(NOTI_PITIDO_HZ, NOTI_PITIDO_MS);
 }
 
 // ---- Notificaciones (notificacion.h) ----
@@ -528,7 +576,8 @@ static void procesar(char *texto) {
       !strcmp(orden, "QUITAR"))
     return ordenNotificacion(p, n);
   if (!strcmp(orden, "ATECC") || !strcmp(orden, "ATECCPUB")) return ordenAtecc(p, n);
-  if (!strcmp(orden, "SSHPUB")) return ordenSshPub();
+  if (!strcmp(orden, "SSHPUB")) return ordenClavePub(RANURA_SSH);
+  if (!strcmp(orden, "CIFPUB")) return ordenClavePub(RANURA_CIFRADO);
   if (bovedaEstado() != BOVEDA_ABIERTA) return error("bloqueado");
   if (preguntando()) return error("ocupado");
   if (sesion == INACTIVA) {
@@ -575,9 +624,12 @@ static void procesar(char *texto) {
   } else if (!strcmp(orden, "MUERTO")) {
     if (sesion == RECIBIENDO) return error("orden");
     ordenMuerto(p, n);
-  } else if (!strcmp(orden, "SSHGENERAR")) {
+  } else if (!strcmp(orden, "SSHGENERAR") || !strcmp(orden, "CIFGENERAR")) {
     if (sesion == RECIBIENDO) return error("orden");
-    ordenSshGenerar();
+    ordenGenerar(orden[0] == 'S' ? RANURA_SSH : RANURA_CIFRADO);
+  } else if (!strcmp(orden, "ECDH")) {
+    if (sesion == RECIBIENDO) return error("orden");
+    ordenEcdh(p, n);
   } else if (!strcmp(orden, "SSHFIRMAR")) {
     if (sesion == RECIBIENDO) return error("orden");
     ordenSshFirmar(p, n);

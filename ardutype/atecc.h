@@ -53,12 +53,16 @@ bool ateccAleatorio(uint8_t salida[TAM_ATECC]);
 // configuración ya bloqueada no exige autorización para usarlas: el PIN lo pide
 // solo el firmware (ver «Agente SSH» en Ardutype_diseno.md).
 const uint8_t RANURA_SSH = 0;
+const uint8_t RANURA_CIFRADO = 1;  // ECDH. NUNCA ECDH en la 2: su secreto iría a la 3 (ADMIN)
 // La pública de la clave que haya; false si la ranura no tiene ninguna
 bool ateccClavePublica(uint8_t ranura, uint8_t pub[64]);
 // Crea una privada nueva (sustituye a la anterior, que se pierde) y da su pública
 bool ateccGenerarClave(uint8_t ranura, uint8_t pub[64]);
 // ECDSA P-256 sobre un resumen SHA-256 ya calculado: firma = r || s (big-endian)
 bool ateccFirmar(uint8_t ranura, const uint8_t resumen[32], uint8_t firma[64]);
+
+// Secreto compartido (X de la ECDH) entre RANURA_CIFRADO y una pública ajena
+bool ateccEcdh(const uint8_t ajena[64], uint8_t secreto[32]);
 
 // Para las pruebas: una orden cualquiera y el último código de estado del chip
 bool ateccOrdenCruda(uint8_t op, uint8_t p1, uint16_t p2, const uint8_t *datos, size_t largoDatos,

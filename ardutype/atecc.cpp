@@ -26,6 +26,7 @@ enum : uint8_t {
   OP_CONTADOR = 0x24,
   OP_GENKEY = 0x40,
   OP_FIRMAR = 0x41,
+  OP_ECDH = 0x43,
 };
 // Zonas en p1 de leer/escribir; 0x80 = 32 bytes en vez de 4
 enum : uint8_t { ZONA_CONFIG = 0x00, ZONA_DATOS = 0x02, ZONA_32 = 0x80 };
@@ -414,6 +415,16 @@ bool ateccFirmar(uint8_t ranura, const uint8_t resumen[32], uint8_t firma[64]) {
   sesion(true);
   bool ok = orden(OP_NONCE, 0x03, 0x0000, resumen, 32, nullptr, 0) &&
             orden(OP_FIRMAR, 0x80, ranura, nullptr, 0, firma, 64);
+  dormir();
+  return ok;
+}
+
+// ECDH con la privada de RANURA_CIFRADO y la pública ajena (X||Y). Modo 0: el
+// destino lo decide la configuración de la ranura; la 1 de fábrica (ReadKey bit 3
+// a 0) devuelve el secreto en claro. La 2 lo escribiría en la 3 (ADMIN): prohibida.
+bool ateccEcdh(const uint8_t ajena[64], uint8_t secreto[32]) {
+  if (estado != ATECC_LISTO) return false;
+  bool ok = orden(OP_ECDH, 0x00, RANURA_CIFRADO, ajena, 64, secreto, 32);
   dormir();
   return ok;
 }

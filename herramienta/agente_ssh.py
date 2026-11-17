@@ -56,7 +56,7 @@ MOTIVOS = {
     "bloqueado": "el Ardutype está bloqueado",
     "ocupado": "el Ardutype está ocupado",
     "cancelado": "rechazado en el Ardutype",
-    "sinclave": "el Ardutype no tiene clave SSH (agente_ssh.py crear)",
+    "sinclave": "el Ardutype no tiene esa clave (crearla con «crear»)",
     "atecc": "error del chip ATECC",
     "orden": "el firmware no conoce la orden: ¿está actualizado?",
 }
@@ -147,11 +147,11 @@ def estado(con):
     return r[2] if len(r) > 2 else "?"
 
 
-def esperar_desbloqueo(con):
+def esperar_desbloqueo(con, texto="Desbloquea para firmar"):
     if estado(con) == "ABIERTA":
         return
     log("Ardutype bloqueado: aviso y espero")
-    avisar(con, ORIGEN, "Desbloquea para firmar".encode())
+    avisar(con, ORIGEN, texto.encode())
     try:
         limite = time.monotonic() + ESPERA_DESBLOQUEO
         while time.monotonic() < limite:

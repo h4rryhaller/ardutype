@@ -21,6 +21,10 @@
 //   SERV <uuid> <cat> <nombre> <usuario> <contraseña> <guion>  -> @OK
 //   FIN                     -> @RESUMEN <nuevos> <cambiados> <borrados>
 //                              (confirmación en el dispositivo) @OK
+//   MUERTO                  -> @MUERTO <guion>   el guion del hombre muerto (muerto.h)
+//   MUERTO <guion|->        -> (confirmación en el dispositivo) @OK; - lo borra.
+//                              Sin $usuario ni $contrasena; con un error de
+//                              sintaxis: @ERR sintaxis <línea> <motivo>
 //   ADIOS                   -> @OK
 //   Cualquier fallo         -> @ERR <motivo>
 //

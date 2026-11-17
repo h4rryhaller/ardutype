@@ -5,6 +5,8 @@
 #include "led.h"
 #include "ui.h"
 #include "notificacion.h"
+#include "guion.h"
+#include "muerto.h"
 #include "admin.h"
 
 static const size_t MAX_LINEA = 1200;  // SERV con todos los campos al máximo (el guion manda)
@@ -21,6 +23,7 @@ enum EstadoSesion : uint8_t {
   ENVIADO,              // cambios enviados, falta CONFIRMADO
   RECIBIENDO,           // llegan las entradas de KeePassXC
   PREGUNTANDO_CAMBIOS,  // ¿aplicar lo que ha llegado?
+  PREGUNTANDO_MUERTO,   // ¿guardar el guion del hombre muerto?
 };
 static EstadoSesion sesion = INACTIVA;
 static uint32_t ultimaOrdenMs = 0;
@@ -118,7 +121,8 @@ static void terminar() {
 }
 
 void adminCancelar() {
-  if (sesion == PREGUNTANDO_ENVIO || sesion == PREGUNTANDO_CAMBIOS) error("cancelado");
+  if (sesion == PREGUNTANDO_ENVIO || sesion == PREGUNTANDO_CAMBIOS || sesion == PREGUNTANDO_MUERTO)
+    error("cancelado");
   borrarEntrantes();
   sesion = INACTIVA;
 }
@@ -292,6 +296,49 @@ static void terminarRecepcion() {
   uiPcPreguntar(pregunta, "Sí, aplicar", alResponderCambios);
 }
 
+// ---- Guion del hombre muerto (muerto.h) ----
+
+static char guionMuerto[LARGO_GUION_MUERTO];
+
+static void alResponderMuerto(bool si) {
+  sesion = ESPERANDO;
+  if (!si) {
+    uiPcTexto("Guion rechazado");
+    return error("cancelado");
+  }
+  const char *fallo = muertoGuardarGuion(guionMuerto);
+  if (fallo) {
+    uiPcTexto("Error con el guion");
+    return error(fallo);
+  }
+  uiPcTexto(guionMuerto[0] ? "Guion guardado" : "Guion borrado");
+  responder("OK");
+}
+
+// MUERTO -> @MUERTO <guion>;  MUERTO <guion|-> -> (confirmación) @OK
+static void ordenMuerto(char **p, int n) {
+  if (n == 1) {
+    Serial.print("@MUERTO");
+    escribirTexto(muertoGuion());
+    Serial.println();
+    return;
+  }
+  if (n != 2 || !leerTextoHex(p[1], guionMuerto, sizeof(guionMuerto), true)) return error("campos");
+  if (strstr(guionMuerto, "$usuario") || strstr(guionMuerto, "$contrasena")) return error("variables");
+  int linea = guionComprobar(guionMuerto);
+  if (linea) {
+    Serial.printf("@ERR sintaxis %d %s\n", linea, guionError());
+    return;
+  }
+  int lineas = 0;
+  for (const char *c = guionMuerto; *c; c++)
+    if (*c == '\n' || !c[1]) lineas++;
+  if (lineas) snprintf(pregunta, sizeof(pregunta), "¿Guion de %d línea%s?", lineas, lineas == 1 ? "" : "s");
+  else snprintf(pregunta, sizeof(pregunta), "¿Borrar el guion?");
+  sesion = PREGUNTANDO_MUERTO;
+  uiPcPreguntar(pregunta, lineas ? "Sí, guardar" : "Sí, borrar", alResponderMuerto);
+}
+
 // ---- Notificaciones (notificacion.h) ----
 
 static bool leerNumero(const char *s, uint32_t &valor, uint32_t maximo) {
@@ -361,7 +408,8 @@ static void procesar(char *texto) {
       !strcmp(orden, "QUITAR"))
     return ordenNotificacion(p, n);
   if (bovedaEstado() != BOVEDA_ABIERTA) return error("bloqueado");
-  if (sesion == PREGUNTANDO_ENVIO || sesion == PREGUNTANDO_CAMBIOS) return error("ocupado");
+  if (sesion == PREGUNTANDO_ENVIO || sesion == PREGUNTANDO_CAMBIOS || sesion == PREGUNTANDO_MUERTO)
+    return error("ocupado");
   if (sesion == INACTIVA) {
     if (!uiPcAbrir()) return error("ocupado");  // a medias de algo que no se puede cortar
     sesion = ESPERANDO;
@@ -403,6 +451,9 @@ static void procesar(char *texto) {
   } else if (!strcmp(orden, "FIN")) {
     if (sesion != RECIBIENDO) return error("orden");
     terminarRecepcion();
+  } else if (!strcmp(orden, "MUERTO")) {
+    if (sesion == RECIBIENDO) return error("orden");
+    ordenMuerto(p, n);
   } else {
     error("orden");
   }
@@ -429,6 +480,6 @@ void adminTick() {
   }
 
   // Si el PC desaparece a medias, la sesión caduca (no mientras se pregunta)
-  bool preguntando = sesion == PREGUNTANDO_ENVIO || sesion == PREGUNTANDO_CAMBIOS;
+  bool preguntando = sesion == PREGUNTANDO_ENVIO || sesion == PREGUNTANDO_CAMBIOS || sesion == PREGUNTANDO_MUERTO;
   if (sesion != INACTIVA && !preguntando && millis() - ultimaOrdenMs >= SESION_PC_MS) terminar();
 }

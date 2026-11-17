@@ -14,6 +14,8 @@
 // desde el PC (herramienta/notificar.py), con pitido y LED violeta.
 // Azar (azar.h): moneda, dados, contraseñas, Diceware, PIN, números, color,
 // alias, MAC, formatos fijos y una prueba del azar; con el TRNG del ATECC.
+// Hombre muerto (muerto.h): sin tocar el joystick, bloquea o suspende el PC
+// o ejecuta un guion propio, con aviso un minuto antes.
 // FASE 8: ATECC608B en el bus del OLED (atecc.h): el chip limita los intentos
 // del PIN. Se provisiona solo, de forma IRREVERSIBLE, la primera vez que se
 // abre o se crea la bóveda con él puesto.
@@ -30,6 +32,7 @@
 #include "pomodoro.h"
 #include "mantener.h"
 #include "notificacion.h"
+#include "muerto.h"
 
 void setup() {
   Serial.begin(115200);
@@ -40,6 +43,7 @@ void setup() {
   tecladoIniciar();
   mantenerIniciar();
   bovedaIniciar();
+  muertoIniciar();
   uiIniciar();
   Serial.println("Ardutype: fase 8 (PIN limitado por el ATECC608)");
 }
@@ -50,6 +54,7 @@ void loop() {
   pomodoroTick();
   mantenerTick();
   notiTick();
+  muertoTick();
   ledTick();
   delay(1);
 }

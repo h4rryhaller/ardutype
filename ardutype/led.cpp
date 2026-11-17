@@ -10,6 +10,7 @@ static bool reposo = false;
 static uint32_t colorPomodoro = 0;
 static ModoLedPomodoro modoPomodoro = LED_POMO_NADA;
 static ModoLedNoti modoNoti = LED_NOTI_NADA;
+static bool muertoAvisando = false;
 static bool azarActivo = false;
 static uint32_t colorAzar = 0;
 static const uint8_t BRILLO_MIN_AZAR = 60;  // con el brillo bajo, los colores no se distinguen
@@ -70,6 +71,8 @@ void ledTick() {
     uint32_t t = ahora % 2000;
     uint8_t nivel = 40 + (t < 1000 ? t : 2000 - t) * 215 / 1000;
     color = escalar(255 * nivel / 255, 120 * nivel / 255, 0);
+  } else if (muertoAvisando) {
+    if (ahora % 400 < 200) color = escalar(COLOR_MUERTO >> 16, (uint8_t)(COLOR_MUERTO >> 8), (uint8_t)COLOR_MUERTO);
   } else if (modoNoti != LED_NOTI_NADA) {
     bool encendido = modoNoti == LED_NOTI_LENTO ? ahora % 2000 < 1000 : ahora % 500 < 250;
     if (encendido) color = escalar(COLOR_NOTI >> 16, (uint8_t)(COLOR_NOTI >> 8), (uint8_t)COLOR_NOTI);
@@ -134,4 +137,8 @@ void ledNotificacion(ModoLedNoti modo) {
 void ledColorAzar(uint32_t rgb, bool si) {
   colorAzar = rgb;
   azarActivo = si;
+}
+
+void ledMuerto(bool si) {
+  muertoAvisando = si;
 }

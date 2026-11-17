@@ -84,4 +84,11 @@ const uint32_t NOTI_SIN_PUERTO_MS = 2000;        // puerto cerrado tanto rato: p
 const uint32_t NOTI_IGNORAR_TECLAS_MS = 600;     // al aparecer, sin teclas por inercia
 const uint32_t COLOR_NOTI = 0xA000FF;            // violeta
 
+// ---- Interruptor del hombre muerto (muerto.h) ----
+const uint32_t MUERTO_AVISO_MS = 60000;           // aviso un minuto antes de cada acción
+const uint32_t MUERTO_REPETIR_PITIDO_MS = 15000;  // durante el aviso, pitido cada 15 s
+const uint16_t MUERTO_PITIDO_HZ = 1400;           // más grave que el pomodoro y las notificaciones
+const uint16_t MUERTO_PITIDO_MS = 400;
+const uint32_t COLOR_MUERTO = 0xFF3000;           // rojo anaranjado
+
 #endif

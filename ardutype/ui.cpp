@@ -20,6 +20,7 @@
 #include "notificacion.h"
 #include "zumbador.h"
 #include "azar.h"
+#include "muerto.h"
 #include "dice_lista.h"   // lista de palabras (castellano): clave de recuperación
 
 using AlAceptarTexto = std::function<void(const char *)>;
@@ -613,6 +614,7 @@ static RuedaPalabras ruedaPalabras;
 
 class Tecleo : public Pantalla {
   const char *nombre = "";
+  const char *pista = "";          // la línea sobre «Una tecla cancela»
   std::function<size_t()> accion;  // teclea y devuelve cuántos caracteres se saltaron
   Accion alTerminar;
   uint32_t inicioMs = 0;
@@ -625,9 +627,11 @@ class Tecleo : public Pantalla {
   }
 
   // Teclear lo que haga la acción (p. ej. ejecutar un guion)
-  void abrir(const char *titulo, std::function<size_t()> a, Accion cb) {
+  void abrir(const char *titulo, std::function<size_t()> a, Accion cb,
+             const char *p = "Pon el cursor.") {
     if (!tud_mounted()) return fallo("Sin conexión USB");
     nombre = titulo;
+    pista = p;
     accion = a;
     alTerminar = cb;
     uiPush(this);
@@ -686,7 +690,7 @@ class Tecleo : public Pantalla {
     snprintf(t, sizeof(t), "%d", ultimoSegundo);
     oled.drawUTF8(4, 26, t);
     oled.setFont(FUENTE_PEQUENA);
-    oled.drawUTF8(22, 18, "Pon el cursor.");
+    oled.drawUTF8(22, 18, pista);
     oled.drawUTF8(22, 27, "Una tecla cancela");
   }
 };
@@ -1879,12 +1883,91 @@ class MenuAzar : public Lista {
 };
 static MenuAzar menuAzar;
 
+// ---- Interruptor del hombre muerto (muerto.h) ----
+
+static const char *const CORTOS_MUERTO[] = {"Bloquear", "Suspender", "Guion"};
+
+static void avisarGuionTrasBloqueo() {
+  if (muertoGuionTrasBloqueo()) aviso("Guion tras bloqueo: no irá");
+}
+
+class MenuAccionMuerto : public Lista {
+  AccionMuerto accion = MUERTO_BLOQUEAR;
+
+ protected:
+  void titulo(char *buf, size_t tam) override { snprintf(buf, tam, "%s", muertoNombre(accion)); }
+  int numItems() override { return accion == MUERTO_GUION ? 4 : 3; }
+
+  void item(int i, char *buf, size_t tam) override {
+    switch (i) {
+      case 0: snprintf(buf, tam, "[%c] Activa", muertoAccionActiva(accion) ? 'x' : ' '); break;
+      case 1: snprintf(buf, tam, "Plazo: %u min", muertoPlazoMin(accion)); break;
+      case 2: snprintf(buf, tam, "Probar ahora"); break;
+      default: {
+        int n = muertoLineasGuion();
+        if (n) snprintf(buf, tam, "Guion: %d línea%s", n, n == 1 ? "" : "s");
+        else snprintf(buf, tam, "Guion: vacío");
+      }
+    }
+  }
+
+  void elegir(int i) override {
+    AccionMuerto a = accion;
+    switch (i) {
+      case 0:
+        muertoAccionActivar(a, !muertoAccionActiva(a));
+        avisarGuionTrasBloqueo();
+        break;
+      case 1:
+        editarNumero.abrir("Plazo (min)", muertoPlazoMin(a), 1, MUERTO_PLAZO_MAX_MIN, [a](int32_t v) {
+          muertoPlazo(a, v);
+          if (!muertoAccionActiva(a)) aviso("Ojo: está desactivada");
+          else if (!muertoActivo()) aviso("Ojo: hombre muerto apagado");
+          else avisarGuionTrasBloqueo();
+        });
+        break;
+      case 2:
+        if (a == MUERTO_GUION && !muertoLineasGuion()) return fallo("Guion vacío");
+        tecleo.abrir(muertoNombre(a), [a]() { muertoEjecutar(a); return (size_t)0; }, nullptr,
+                     "Va a lanzarse.");
+        break;
+      default: aviso("Se carga desde el PC"); break;
+    }
+  }
+
+ public:
+  void abrir(AccionMuerto a) {
+    accion = a;
+    uiPush(this);
+  }
+};
+static MenuAccionMuerto menuAccionMuerto;
+
+class MenuMuerto : public Lista {
+ protected:
+  void titulo(char *buf, size_t tam) override { snprintf(buf, tam, "Hombre muerto"); }
+  int numItems() override { return 1 + NUM_ACCIONES_MUERTO; }
+
+  void item(int i, char *buf, size_t tam) override {
+    if (!i) return (void)snprintf(buf, tam, "Activo: %s", muertoActivo() ? "sí" : "no");
+    AccionMuerto a = (AccionMuerto)(i - 1);
+    snprintf(buf, tam, "[%c] %s %um", muertoAccionActiva(a) ? 'x' : ' ', CORTOS_MUERTO[a], muertoPlazoMin(a));
+  }
+
+  void elegir(int i) override {
+    if (i) return menuAccionMuerto.abrir((AccionMuerto)(i - 1));
+    muertoActivar(!muertoActivo());
+    if (muertoActivo()) avisarGuionTrasBloqueo();
+  }
+};
+static MenuMuerto menuMuerto;
+
 // ---- Menú principal: categorías ----
 
 class MenuPrincipal : public Lista {
  protected:
   void titulo(char *buf, size_t tam) override { snprintf(buf, tam, "Ardutype"); }
-  int numItems() override { return almacenNumCategorias() + 6; }
+  int numItems() override { return almacenNumCategorias() + 7; }
 
   void item(int i, char *buf, size_t tam) override {
     int n = almacenNumCategorias();
@@ -1894,7 +1977,8 @@ class MenuPrincipal : public Lista {
     else if (i == n + 2 && mantenerActivo()) textoMantener(buf, tam);
     else if (i == n + 2) snprintf(buf, tam, "Mantener sesión");
     else if (i == n + 3) snprintf(buf, tam, "Azar");
-    else if (i == n + 4) snprintf(buf, tam, "Ajustes");
+    else if (i == n + 4) snprintf(buf, tam, "Hombre muerto: %s", muertoActivo() ? "sí" : "no");
+    else if (i == n + 5) snprintf(buf, tam, "Ajustes");
     else snprintf(buf, tam, "Bloquear");
   }
 
@@ -1909,8 +1993,9 @@ void MenuPrincipal::elegir(int i) {
   if (i == n + 1) return uiPush(&pantallaPomodoro);
   if (i == n + 2) return uiPush(&menuMantener);
   if (i == n + 3) return uiPush(&menuAzar);
-  if (i == n + 4) return uiPush(&ajustes);
-  if (i == n + 5) return bloquear();
+  if (i == n + 4) return uiPush(&menuMuerto);
+  if (i == n + 5) return uiPush(&ajustes);
+  if (i == n + 6) return bloquear();
   rueda.abrir("Nueva categoría", "", LARGO_NOMBRE, false, [](const char *t) {
     int c = almacenNuevaCategoria(t);
     uiVolverA(&menu);
@@ -2707,6 +2792,59 @@ static void sincronizarNoti() {
   if (!aceptarTrasPin && !enPila(&pantallaNoti) && puedeMostrarNoti()) uiPush(&pantallaNoti);
 }
 
+// ---- Aviso del hombre muerto ----
+//
+// En el minuto antes de cada acción se pone encima de lo que haya (salvo
+// mientras se teclea, en la sincronización o con la clave de recuperación) y
+// enciende la pantalla. Cualquier tecla la quita: uiTick ya da la señal de vida.
+
+class PantallaMuerto : public Pantalla {
+  int ultimoSegundo = -1;
+
+ public:
+  bool apagable() override { return false; }
+  void tecla(Tecla) override {}
+
+  void tick() override {
+    AccionMuerto a;
+    int s = muertoAvisoSegundos(a);
+    if (s != ultimoSegundo) {
+      ultimoSegundo = s;
+      sucio = true;
+    }
+  }
+
+  void dibujar() override {
+    AccionMuerto a;
+    int s = muertoAvisoSegundos(a);
+    if (s < 0) return;
+    char t[8], linea[32];
+    snprintf(t, sizeof(t), "%d s", s);
+    pantallaCabecera("Hombre muerto", t);
+    snprintf(linea, sizeof(linea), "%s en %d s", muertoNombre(a), s);
+    pantallaFila(0, linea, false);
+    pantallaFila(1, "Pulsa una tecla", false);
+  }
+};
+static PantallaMuerto pantallaMuerto;
+
+static uint32_t eventosMuertoVistos = 0;
+
+static void sincronizarMuerto() {
+  AccionMuerto a;
+  bool avisando = muertoAvisoSegundos(a) >= 0;
+  if (avisando && !enPila(&pantallaMuerto) && puedeMostrarNoti()) {
+    despertarPorNoti();  // enciende el OLED sin retrasar el bloqueo del Ardutype
+    uiPush(&pantallaMuerto);
+  } else if (!avisando && enPila(&pantallaMuerto)) {
+    quitarDePila(&pantallaMuerto);
+  }
+  if (muertoEventos() != eventosMuertoVistos) {
+    eventosMuertoVistos = muertoEventos();
+    aviso(muertoUltimoEvento());
+  }
+}
+
 // ---- Bucle ----
 
 void uiIniciar() {
@@ -2724,6 +2862,7 @@ void uiTick() {
 
   if (t != NINGUNA) {
     ultimaTeclaMs = ahora;
+    muertoSenal();  // señal de vida, aunque la tecla solo despierte la pantalla
     ledPulsacion();
     if (atenuada) {
       atenuada = false;
@@ -2746,6 +2885,7 @@ void uiTick() {
     sucio = true;
   }
   sincronizarNoti();
+  sincronizarMuerto();
   if (!enPila(&resultado)) resultado.soltar();  // p. ej. tras el bloqueo automático
   cima()->tick();
 

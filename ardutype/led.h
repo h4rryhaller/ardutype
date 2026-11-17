@@ -37,4 +37,8 @@ void ledNotificacion(ModoLedNoti modo);
 // que se distinga. ledColorAzar(0, false) lo quita.
 void ledColorAzar(uint32_t rgb, bool activo);
 
+// Aviso del hombre muerto: parpadeo rápido rojo anaranjado, por encima de las
+// notificaciones (hay que pulsar algo en menos de un minuto)
+void ledMuerto(bool avisando);
+
 #endif

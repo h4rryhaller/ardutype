@@ -32,4 +32,9 @@ void ledPomodoro(uint32_t rgb, ModoLedPomodoro modo);
 enum ModoLedNoti : uint8_t { LED_NOTI_NADA, LED_NOTI_LENTO, LED_NOTI_RAPIDO };
 void ledNotificacion(ModoLedNoti modo);
 
+// Menú «Azar» → Color: el LED muestra ese color por encima de todo (también
+// de los destellos y del ajuste que apaga el LED), con un brillo mínimo para
+// que se distinga. ledColorAzar(0, false) lo quita.
+void ledColorAzar(uint32_t rgb, bool activo);
+
 #endif

@@ -10,6 +10,9 @@ static bool reposo = false;
 static uint32_t colorPomodoro = 0;
 static ModoLedPomodoro modoPomodoro = LED_POMO_NADA;
 static ModoLedNoti modoNoti = LED_NOTI_NADA;
+static bool azarActivo = false;
+static uint32_t colorAzar = 0;
+static const uint8_t BRILLO_MIN_AZAR = 60;  // con el brillo bajo, los colores no se distinguen
 
 // Destello en curso: color, número de encendidos y duración de cada fase
 static uint32_t colorDestello = 0;
@@ -49,7 +52,11 @@ void ledTick() {
   uint32_t ahora = millis();
   uint32_t color = 0;
 
-  if (!activo) {
+  if (azarActivo) {
+    uint8_t b = max(brillo, BRILLO_MIN_AZAR);
+    uint32_t g = pixel.gamma32(colorAzar);
+    color = pixel.Color((uint8_t)(g >> 16) * b / 255, (uint8_t)(g >> 8) * b / 255, (uint8_t)g * b / 255);
+  } else if (!activo) {
     color = 0;
   } else if (vecesDestello) {
     uint32_t fase = (ahora - inicioDestelloMs) / faseMs;
@@ -122,4 +129,9 @@ void ledPomodoro(uint32_t rgb, ModoLedPomodoro modo) {
 
 void ledNotificacion(ModoLedNoti modo) {
   modoNoti = modo;
+}
+
+void ledColorAzar(uint32_t rgb, bool si) {
+  colorAzar = rgb;
+  azarActivo = si;
 }

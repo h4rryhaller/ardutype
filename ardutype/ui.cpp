@@ -1,4 +1,5 @@
 #include <functional>
+#include <LittleFS.h>
 #include "tusb.h"
 
 #include "config.h"
@@ -17,6 +18,8 @@
 #include "pomodoro.h"
 #include "mantener.h"
 #include "notificacion.h"
+#include "zumbador.h"
+#include "azar.h"
 #include "dice_lista.h"   // lista de palabras (castellano): clave de recuperación
 
 using AlAceptarTexto = std::function<void(const char *)>;
@@ -1195,12 +1198,693 @@ class MenuMantener : public Lista {
 };
 static MenuMantener menuMantener;
 
+// ---- Azar (azar.h): moneda, dados, contraseñas, colores... ----
+//
+// No toca la bóveda, así que funciona también bloqueado (izquierda en la
+// pantalla de bloqueo). Los parámetros se recuerdan en /azar.bin, aparte de
+// la bóveda (no son secretos y así se guardan aunque esté bloqueado).
+
+static const char *const FICHERO_AZAR = "/azar.bin";
+static const char *const TEMPORAL_AZAR = "/azar.tmp";
+static const uint32_t MAGIA_AZAR = 0x415A5201;  // «AZR» y versión 1
+
+static const int32_t CARAS_DADO[] = {4, 6, 8, 10, 12, 20, 100};
+static const char SEPARADORES[] = {'-', ' ', '.', 0};
+static const char *const NOMBRES_SEPARADOR[] = {"-", "espacio", ".", "ninguno"};
+
+struct AjustesAzar {
+  uint32_t magia;
+  int32_t largo, minusculas, mayusculas, cifras, simbolos, sinParecidos;
+  int32_t palabras, separador;  // separador: índice de SEPARADORES
+  int32_t cifrasPin;
+  int32_t monedas;
+  int32_t dados, caras;         // caras: índice de CARAS_DADO
+  int32_t desde, hasta, cuantos, repetidos;
+  int32_t sonido;
+};
+static const AjustesAzar AZAR_INICIAL = {MAGIA_AZAR, 16, 1, 1, 1, 1, 1, 6, 0, 6, 1, 2, 1, 1, 99, 6, 0, 1};
+static AjustesAzar az = AZAR_INICIAL;
+
+static void cargarAzar() {
+  File f = LittleFS.open(FICHERO_AZAR, "r");
+  if (!f) return;
+  AjustesAzar leidos;
+  bool ok = f.read((uint8_t *)&leidos, sizeof(leidos)) == sizeof(leidos) && leidos.magia == MAGIA_AZAR;
+  f.close();
+  if (ok) az = leidos;
+}
+
+static void guardarAzar() {
+  File f = LittleFS.open(TEMPORAL_AZAR, "w");
+  if (!f) return fallo("Error al guardar");
+  bool ok = f.write((const uint8_t *)&az, sizeof(az)) == sizeof(az);
+  f.close();
+  if (!ok || !LittleFS.rename(TEMPORAL_AZAR, FICHERO_AZAR)) fallo("Error al guardar");
+}
+
+// ---- Parámetros de cada generador ----
+
+enum TipoParam : uint8_t { P_NUMERO, P_CASILLA, P_LISTA };
+
+struct Param {
+  const char *nombre;
+  int32_t *valor;
+  TipoParam tipo;
+  int32_t min, max;                 // P_LISTA: max = número de opciones
+  const char *(*opcion)(int32_t);   // P_LISTA: nombre de cada opción
+};
+
+static const char *nombreCaras(int32_t i) {
+  static char t[6];
+  snprintf(t, sizeof(t), "d%ld", (long)CARAS_DADO[i]);
+  return t;
+}
+static const char *nombreSeparador(int32_t i) { return NOMBRES_SEPARADOR[i]; }
+
+static const Param PARAMS_CONTRASENA[] = {
+  {"Longitud", &az.largo, P_NUMERO, 4, 64, nullptr},
+  {"a-z", &az.minusculas, P_CASILLA, 0, 1, nullptr},
+  {"A-Z", &az.mayusculas, P_CASILLA, 0, 1, nullptr},
+  {"0-9", &az.cifras, P_CASILLA, 0, 1, nullptr},
+  {"Símbolos", &az.simbolos, P_CASILLA, 0, 1, nullptr},
+  {"Excl. parecidos", &az.sinParecidos, P_CASILLA, 0, 1, nullptr},
+};
+static const Param PARAMS_DICEWARE[] = {
+  {"Palabras", &az.palabras, P_NUMERO, 3, 10, nullptr},
+  {"Separador", &az.separador, P_LISTA, 0, NUM(SEPARADORES), nombreSeparador},
+};
+static const Param PARAMS_PIN[] = {{"Cifras", &az.cifrasPin, P_NUMERO, 4, 12, nullptr}};
+static const Param PARAMS_MONEDA[] = {{"Monedas", &az.monedas, P_NUMERO, 1, 20, nullptr}};
+static const Param PARAMS_DADOS[] = {
+  {"Dados", &az.dados, P_NUMERO, 1, 10, nullptr},
+  {"Caras", &az.caras, P_LISTA, 0, NUM(CARAS_DADO), nombreCaras},
+};
+static const Param PARAMS_NUMEROS[] = {
+  {"Desde", &az.desde, P_NUMERO, 0, 999999, nullptr},
+  {"Hasta", &az.hasta, P_NUMERO, 0, 999999, nullptr},
+  {"Cuántos", &az.cuantos, P_NUMERO, 1, 20, nullptr},
+  {"Repetidos", &az.repetidos, P_CASILLA, 0, 1, nullptr},
+};
+
+// Lo leído del fichero puede venir de otra versión: se ajusta a los límites
+static void validarAzar() {
+  const Param *todos[] = {PARAMS_CONTRASENA, PARAMS_DICEWARE, PARAMS_PIN,
+                          PARAMS_MONEDA, PARAMS_DADOS, PARAMS_NUMEROS};
+  const int num[] = {NUM(PARAMS_CONTRASENA), NUM(PARAMS_DICEWARE), NUM(PARAMS_PIN),
+                     NUM(PARAMS_MONEDA), NUM(PARAMS_DADOS), NUM(PARAMS_NUMEROS)};
+  for (int g = 0; g < NUM(todos); g++) {
+    for (int i = 0; i < num[g]; i++) {
+      const Param &p = todos[g][i];
+      int32_t tope = p.tipo == P_LISTA ? p.max - 1 : p.max;
+      if (*p.valor < p.min || *p.valor > tope) *p.valor = p.min;
+    }
+  }
+  if (!az.minusculas && !az.mayusculas && !az.cifras && !az.simbolos) az.minusculas = 1;
+  az.sonido = az.sonido ? 1 : 0;
+}
+
+// ---- Generadores ----
+
+struct Resultado {
+  char valor[200];
+  char info[16];   // a la derecha de la cabecera: «95 bits», «suma 9»
+  uint32_t color;
+  bool hayColor;
+};
+
+static void bits(Resultado &r, float b) {
+  snprintf(r.info, sizeof(r.info), "%d bits", (int)b);
+}
+
+static bool genContrasena(Resultado &r) {
+  uint8_t c = (az.minusculas ? AZAR_MINUSCULAS : 0) | (az.mayusculas ? AZAR_MAYUSCULAS : 0) |
+              (az.cifras ? AZAR_CIFRAS : 0) | (az.simbolos ? AZAR_SIMBOLOS : 0);
+  bits(r, azarContrasena(r.valor, sizeof(r.valor), az.largo, c, az.sinParecidos));
+  return true;
+}
+static bool genDiceware(Resultado &r) {
+  bits(r, azarDiceware(r.valor, sizeof(r.valor), az.palabras, SEPARADORES[az.separador]));
+  return true;
+}
+static bool genPin(Resultado &r) {
+  bits(r, azarPin(r.valor, sizeof(r.valor), az.cifrasPin));
+  return true;
+}
+static bool genMoneda(Resultado &r) {
+  azarMonedas(r.valor, sizeof(r.valor), r.info, sizeof(r.info), az.monedas);
+  return true;
+}
+static bool genDados(Resultado &r) {
+  azarDados(r.valor, sizeof(r.valor), r.info, sizeof(r.info), az.dados, CARAS_DADO[az.caras]);
+  return true;
+}
+static bool genNumeros(Resultado &r) {
+  snprintf(r.info, sizeof(r.info), "%ld-%ld", (long)min(az.desde, az.hasta), (long)max(az.desde, az.hasta));
+  return azarNumeros(r.valor, sizeof(r.valor), az.desde, az.hasta, az.cuantos, az.repetidos);
+}
+static bool genColor(Resultado &r) {
+  r.color = azarColor();
+  r.hayColor = true;
+  snprintf(r.valor, sizeof(r.valor), "#%06lX", (unsigned long)r.color);
+  bits(r, 24);
+  return true;
+}
+static bool genAlias(Resultado &r) {
+  bits(r, azarAlias(r.valor, sizeof(r.valor)));
+  return true;
+}
+static bool genMac(Resultado &r) {
+  bits(r, azarMac(r.valor, sizeof(r.valor)));
+  return true;
+}
+static bool genAlfanumerico(Resultado &r) {
+  bits(r, azarFormato(r.valor, sizeof(r.valor), AZAR_ALFANUMERICO, 32));
+  return true;
+}
+static bool genToken(Resultado &r) {
+  bits(r, azarFormato(r.valor, sizeof(r.valor), AZAR_TOKEN, 64));
+  return true;
+}
+static bool genHex(Resultado &r) {
+  bits(r, azarFormato(r.valor, sizeof(r.valor), AZAR_HEX, 32));
+  return true;
+}
+static bool genUuid(Resultado &r) {
+  bits(r, azarUuid(r.valor, sizeof(r.valor)));
+  return true;
+}
+
+// Para que la pantalla no cambie de fuente ni se mueva entre valores de la
+// ruleta, el tamaño se decide con el caso más largo posible:
+//   - texto: largoMax() caracteres como mucho;
+//   - fichas (números, dados, monedas, PIN): fichas() valores separados por
+//     espacios, de hueco() caracteres como mucho; cada uno se alinea a la
+//     derecha en su hueco (el 7 ocupa el sitio del 43).
+struct Generador {
+  const char *nombre;
+  const char *accion;   // primera entrada de su menú: «Generar», «Lanzar»
+  const Param *params;  // nullptr: sin menú, genera directamente
+  int numParams;
+  bool (*generar)(Resultado &);
+  int (*largoMax)();    // texto (nullptr si son fichas)
+  int (*hueco)();       // fichas (nullptr si es texto)
+  int (*fichas)();
+};
+
+static int cifras(int32_t v) {
+  int n = 1;
+  for (v = v < 0 ? -v : v; v >= 10; v /= 10) n++;
+  return n;
+}
+static int largoContrasena() { return az.largo; }
+static int largoDiceware() { return az.palabras * 11; }  // palabras de hasta 10 letras
+static int largoAlias() { return 10 + 1 + 10 + 3; }
+static int largoColor() { return 7; }
+static int largoMac() { return 17; }
+static int largo32() { return 32; }
+static int largo64() { return 64; }
+static int largoUuid() { return 36; }
+static int huecoPin() { return az.cifrasPin; }
+static int huecoUno() { return 1; }
+static int huecoDado() { return cifras(CARAS_DADO[az.caras]); }
+static int huecoNumero() { return max(cifras(az.desde), cifras(az.hasta)); }
+static int fichasUna() { return 1; }
+static int fichasMonedas() { return az.monedas; }
+static int fichasDados() { return az.dados; }
+static int fichasNumeros() { return az.cuantos; }
+
+static const Generador GENERADORES[] = {
+  {"Contraseña", "Generar", PARAMS_CONTRASENA, NUM(PARAMS_CONTRASENA), genContrasena, largoContrasena},
+  {"Diceware", "Generar", PARAMS_DICEWARE, NUM(PARAMS_DICEWARE), genDiceware, largoDiceware},
+  {"PIN", "Generar", PARAMS_PIN, NUM(PARAMS_PIN), genPin, nullptr, huecoPin, fichasUna},
+  {"Moneda", "Lanzar", PARAMS_MONEDA, NUM(PARAMS_MONEDA), genMoneda, nullptr, huecoUno, fichasMonedas},
+  {"Dados", "Lanzar", PARAMS_DADOS, NUM(PARAMS_DADOS), genDados, nullptr, huecoDado, fichasDados},
+  {"Números", "Generar", PARAMS_NUMEROS, NUM(PARAMS_NUMEROS), genNumeros, nullptr, huecoNumero, fichasNumeros},
+  {"Color", nullptr, nullptr, 0, genColor, largoColor},
+  {"Alias", nullptr, nullptr, 0, genAlias, largoAlias},
+  {"MAC", nullptr, nullptr, 0, genMac, largoMac},
+  {"Alfanumérico 32", nullptr, nullptr, 0, genAlfanumerico, largo32},
+  {"Token 64", nullptr, nullptr, 0, genToken, largo64},
+  {"Hexadecimal 32", nullptr, nullptr, 0, genHex, largo32},
+  {"UUID", nullptr, nullptr, 0, genUuid, largoUuid},
+};
+
+// ---- Editar un número ----
+//
+// Hasta 999: arriba/abajo suman o restan 1 (mantenidos, se repiten y
+// aceleran). Desde 1000: por cifras; izquierda/derecha eligen la cifra y
+// arriba/abajo la cambian. Centro acepta; izquierda (en la primera cifra) cancela.
+
+using AlAceptarNumero = std::function<void(int32_t)>;
+
+class EditarNumero : public Pantalla {
+  const char *nombre = "";
+  int32_t valor = 0, minimo = 0, maximo = 0;
+  int digitos = 0;   // 0: de uno en uno
+  int cursor = 0;    // cifra que se cambia: 0 = unidades
+  AlAceptarNumero alAceptar;
+
+  int32_t potencia(int n) {
+    int32_t p = 1;
+    while (n--) p *= 10;
+    return p;
+  }
+
+  void sumar(int32_t paso) {
+    valor = constrain(valor + paso, minimo, maximo);
+  }
+
+  void aceptar() {
+    AlAceptarNumero cb = alAceptar;
+    int32_t v = valor;
+    uiPop();
+    cb(v);
+  }
+
+ public:
+  void abrir(const char *titulo, int32_t inicial, int32_t mn, int32_t mx, AlAceptarNumero cb) {
+    nombre = titulo;
+    minimo = mn;
+    maximo = mx;
+    valor = constrain(inicial, mn, mx);
+    digitos = 0;
+    if (mx >= 1000)
+      for (int32_t m = mx; m; m /= 10) digitos++;
+    cursor = 0;
+    alAceptar = cb;
+    uiPush(this);
+  }
+
+  void tecla(Tecla t) override {
+    int32_t paso = digitos ? potencia(cursor) : 1;
+    switch (t) {
+      case ARRIBA: sumar(paso); break;
+      case ABAJO: sumar(-paso); break;
+      case DERECHA:
+        if (!digitos) aceptar();
+        else if (cursor > 0) cursor--;
+        break;
+      case IZQUIERDA:
+        if (digitos && cursor < digitos - 1) cursor++;
+        else uiPop();  // cancelar
+        break;
+      case CENTRO:
+      case CENTRO_LARGO: aceptar(); break;
+      default: break;
+    }
+  }
+
+  void dibujar() override {
+    char rango[24];
+    snprintf(rango, sizeof(rango), "%ld-%ld", (long)minimo, (long)maximo);
+    pantallaCabecera(nombre, rango);
+    oled.setFont(FUENTE_GRANDE);
+    char t[12];
+    if (digitos) snprintf(t, sizeof(t), "%0*ld", digitos, (long)valor);
+    else snprintf(t, sizeof(t), "%ld", (long)valor);
+    int ancho = oled.getStrWidth(t);
+    int x = (128 - ancho) / 2;
+    oled.drawStr(x, 27, t);
+    if (digitos) {
+      // Raya bajo la cifra que se cambia
+      int i = digitos - 1 - cursor;
+      char antes[12];
+      memcpy(antes, t, i);
+      antes[i] = '\0';
+      char cifra[2] = {t[i], '\0'};
+      oled.drawHLine(x + oled.getStrWidth(antes), 30, oled.getStrWidth(cifra));
+    }
+  }
+};
+static EditarNumero editarNumero;
+
+// ---- Resultado, con efecto ruleta ----
+//
+// Antes del resultado pasan valores al azar cada vez más despacio (con un
+// clic del zumbador en cada uno si el sonido está activo). Una tecla lo
+// salta. Después: centro teclea, derecha genera otro, izquierda sale (y
+// borra el resultado de la RAM), arriba/abajo desplazan si no cabe.
+
+static const uint16_t RULETA_PRIMER_PASO_MS = 35;
+static const uint16_t RULETA_ULTIMO_PASO_MS = 300;
+static const uint16_t RULETA_CLIC_HZ = 1800;
+static const uint16_t RULETA_FIN_HZ = 2400;
+
+class PantallaResultado : public Pantalla {
+  const Generador *gen = nullptr;
+  Resultado r, candidato;
+  bool activo = false;
+  bool animando = false;
+  uint32_t proximoMs = 0;
+  uint32_t pasoMs = 0;
+  int desplaz = 0;          // primera fila a la vista
+  uint32_t mitad = 0;       // la cabecera alterna cada 3 s
+  bool grande = false;      // fuente grande (se decide una vez por generación)
+  int hueco = 0;            // fichas: caracteres de cada una (0: es texto)
+  int numFichas = 0;
+  int avance = 0;           // fichas en grande: ancho de cada carácter
+
+  // Texto en grande: helvB12 es proporcional; 11 px por carácter es holgado
+  static const int ANCHO_TEXTO_GRANDE = 11;
+  static const int ANCHO_UTIL = 124;
+
+  void decidirFormato() {
+    hueco = gen->hueco ? gen->hueco() : 0;
+    numFichas = gen->fichas ? gen->fichas() : 0;
+    oled.setFont(FUENTE_GRANDE);
+    if (hueco) {
+      avance = 0;
+      for (const char *c = "0123456789CX"; *c; c++) {
+        char t[2] = {*c, '\0'};
+        avance = max(avance, (int)oled.getStrWidth(t));
+      }
+      grande = anchoFichas() <= ANCHO_UTIL;
+    } else {
+      grande = gen->largoMax() * ANCHO_TEXTO_GRANDE <= ANCHO_UTIL;
+    }
+  }
+
+  int anchoFichas() { return numFichas * hueco * avance + (numFichas - 1) * (avance / 2); }
+  int fichasPorFila() { return max(1, (CARACTERES_FILA + 1) / (hueco + 1)); }
+
+  // Parte el valor en fichas (separadas por espacios); devuelve cuántas
+  int partir(const char *valor, const char *trozos[], int largos[], int max) {
+    int n = 0;
+    for (const char *p = valor; *p && n < max;) {
+      while (*p == ' ') p++;
+      if (!*p) break;
+      trozos[n] = p;
+      while (*p && *p != ' ') p++;
+      largos[n] = p - trozos[n];
+      n++;
+    }
+    return n;
+  }
+
+  bool generar() {
+    memset(&r, 0, sizeof(r));
+    azarSembrar();
+    if (!gen->generar(r)) {
+      criptoBorrar(&r, sizeof(r));
+      return false;
+    }
+    animando = true;
+    pasoMs = RULETA_PRIMER_PASO_MS;
+    proximoMs = millis();
+    desplaz = 0;
+    decidirFormato();
+    return true;
+  }
+
+  void terminarRuleta() {
+    animando = false;
+    criptoBorrar(&candidato, sizeof(candidato));
+    if (r.hayColor) ledColorAzar(r.color, true);
+    if (az.sonido) zumbadorPitido(RULETA_FIN_HZ, 40);
+    sucio = true;
+  }
+
+  int filas(const char *t) {
+    if (grande) return 1;
+    int n = hueco ? numFichas : utf8Contar(t);
+    int porFila = hueco ? fichasPorFila() : CARACTERES_FILA;
+    return n ? (n + porFila - 1) / porFila : 1;
+  }
+
+ public:
+  void abrir(const Generador *g) {
+    gen = g;
+    if (!generar()) return fallo("No caben sin repetir");
+    activo = true;
+    uiPush(this);
+  }
+
+  // Al salir (o si la pantalla desaparece por el bloqueo): fuera de la RAM y del LED
+  void soltar() {
+    if (!activo) return;
+    activo = animando = false;
+    criptoBorrar(&r, sizeof(r));
+    criptoBorrar(&candidato, sizeof(candidato));
+    ledColorAzar(0, false);
+  }
+
+  void tecla(Tecla t) override {
+    if (animando) return terminarRuleta();
+    switch (t) {
+      case ARRIBA:
+        if (desplaz > 0) desplaz--;
+        break;
+      case ABAJO:
+        if (desplaz + 2 < filas(r.valor)) desplaz++;
+        break;
+      case CENTRO: tecleo.abrir(gen->nombre, r.valor, nullptr); break;
+      case DERECHA:
+        if (!generar()) fallo("No caben sin repetir");
+        break;
+      case IZQUIERDA:
+        soltar();
+        uiPop();
+        break;
+      case CENTRO_LARGO: bloquear(); break;
+      default: break;
+    }
+  }
+
+  void tick() override {
+    uint32_t ahora = millis();
+    if (!animando) {
+      uint32_t m = ahora / 3000;
+      if (m != mitad) {
+        mitad = m;
+        sucio = true;
+      }
+      return;
+    }
+    if ((int32_t)(ahora - proximoMs) < 0) return;
+    if (pasoMs > RULETA_ULTIMO_PASO_MS) return terminarRuleta();
+    memset(&candidato, 0, sizeof(candidato));
+    gen->generar(candidato);
+    if (candidato.hayColor) ledColorAzar(candidato.color, true);
+    if (az.sonido) zumbadorPitido(RULETA_CLIC_HZ, 4);
+    proximoMs = ahora + pasoMs;
+    pasoMs = pasoMs * 118 / 100;  // cada vez más despacio
+    sucio = true;
+  }
+
+  void dibujar() override {
+    const Resultado &v = animando ? candidato : r;
+    bool ayuda = !animando && (millis() / 3000) % 2;
+    pantallaCabecera(ayuda ? "C teclea, D otra" : gen->nombre, animando ? "" : r.info);
+    if (hueco) return dibujarFichas(v.valor);
+    if (grande) {
+      oled.setFont(FUENTE_GRANDE);
+      pantallaCentrado(27, v.valor);
+      return;
+    }
+    char tramo[CARACTERES_FILA * 3 + 1];
+    for (int f = 0; f < 2; f++) {
+      utf8Tramo(v.valor, (desplaz + f) * CARACTERES_FILA, CARACTERES_FILA, tramo, sizeof(tramo));
+      pantallaFila(f, tramo, false);
+    }
+  }
+
+  // Cada ficha alineada a la derecha en su hueco
+  void dibujarFichas(const char *valor) {
+    static const int MAX_FICHAS = 50;
+    const char *trozos[MAX_FICHAS];
+    int largos[MAX_FICHAS];
+    int n = partir(valor, trozos, largos, MAX_FICHAS);
+    if (grande) {
+      oled.setFont(FUENTE_GRANDE);
+      int paso = hueco * avance + avance / 2;
+      int x0 = (128 - anchoFichas()) / 2;
+      for (int i = 0; i < n; i++) {
+        int x = x0 + i * paso + (hueco - largos[i]) * avance;
+        for (int j = 0; j < largos[i]; j++) {
+          char c[2] = {trozos[i][j], '\0'};
+          oled.drawStr(x + j * avance + (avance - oled.getStrWidth(c)) / 2, 27, c);
+        }
+      }
+      return;
+    }
+    // En filas (fuente de ancho fijo): rellenando con espacios a la izquierda
+    int porFila = fichasPorFila();
+    for (int f = 0; f < 2; f++) {
+      char linea[CARACTERES_FILA + 1] = "";
+      size_t usado = 0;
+      for (int k = 0; k < porFila; k++) {
+        int i = (desplaz + f) * porFila + k;
+        if (i >= n) break;
+        int w = snprintf(linea + usado, sizeof(linea) - usado, k ? " %*.*s" : "%*.*s", hueco, largos[i], trozos[i]);
+        if (w < 0 || usado + w >= sizeof(linea)) break;
+        usado += w;
+      }
+      pantallaFila(f, linea, false);
+    }
+  }
+};
+static PantallaResultado resultado;
+
+// ---- Prueba del azar ----
+//
+// Tira 6000 dados y dibuja cuántas veces sale cada cara. Con un buen azar,
+// las seis barras salen casi iguales; chi² (5 grados de libertad) lo mide:
+// por debajo de 11,07 es normal; por encima de 15,09 pasa menos del 1 % de las veces.
+
+static const uint32_t PRUEBA_TIRADAS = 6000;
+static const uint32_t PRUEBA_POR_TICK = 120;
+
+class PantallaPrueba : public Pantalla {
+  uint32_t veces[6];
+  uint32_t total = 0;
+
+  void empezar() {
+    memset(veces, 0, sizeof(veces));
+    total = 0;
+    azarSembrar();
+    sucio = true;
+  }
+
+  float chi2() {
+    float esperado = total / 6.0f, s = 0;
+    for (int i = 0; i < 6; i++) s += (veces[i] - esperado) * (veces[i] - esperado) / esperado;
+    return s;
+  }
+
+ public:
+  void entrar() override { empezar(); }
+
+  void tecla(Tecla t) override {
+    switch (t) {
+      case CENTRO:
+      case DERECHA: empezar(); break;
+      case IZQUIERDA: uiPop(); break;
+      case CENTRO_LARGO: bloquear(); break;
+      default: break;
+    }
+  }
+
+  void tick() override {
+    if (total >= PRUEBA_TIRADAS) return;
+    for (uint32_t i = 0; i < PRUEBA_POR_TICK; i++) veces[azarUniforme(6)]++;
+    total += PRUEBA_POR_TICK;
+    if (total >= PRUEBA_TIRADAS && az.sonido) zumbadorPitido(RULETA_FIN_HZ, 40);
+    sucio = true;
+  }
+
+  void dibujar() override {
+    char izq[32], der[16];
+    if (total < PRUEBA_TIRADAS) {
+      snprintf(izq, sizeof(izq), "Prueba del azar");
+      snprintf(der, sizeof(der), "%lu", (unsigned long)total);
+    } else {
+      float c = chi2();
+      const char *veredicto = c < 11.07f ? "bien" : c < 15.09f ? "dudoso" : "raro";
+      snprintf(izq, sizeof(izq), "chi2 %.1f: %s", c, veredicto);
+      snprintf(der, sizeof(der), "%s", azarConChip() ? "ATECC" : "sin chip");
+    }
+    pantallaCabecera(izq, der);
+
+    uint32_t mayor = 1;
+    for (int i = 0; i < 6; i++) mayor = max(mayor, veces[i]);
+    oled.setFont(FUENTE_PEQUENA);
+    for (int i = 0; i < 6; i++) {
+      int x = i * 21, alto = veces[i] * 22 / mayor;
+      oled.drawBox(x, 32 - alto, 20, alto);
+      char n[8];
+      snprintf(n, sizeof(n), "%lu", (unsigned long)veces[i]);
+      if (alto >= 9) {  // el número dentro de la barra, en negativo
+        oled.setDrawColor(0);
+        oled.drawStr(x + (20 - oled.getStrWidth(n)) / 2, 32 - alto + 8, n);
+        oled.setDrawColor(1);
+      }
+    }
+  }
+};
+static PantallaPrueba pantallaPrueba;
+
+// ---- Menús ----
+
+class MenuParametros : public Lista {
+  const Generador *gen = nullptr;
+
+  static int conjuntos() { return az.minusculas + az.mayusculas + az.cifras + az.simbolos; }
+
+ protected:
+  void titulo(char *buf, size_t tam) override { snprintf(buf, tam, "%s", gen->nombre); }
+  int numItems() override { return gen->numParams + 1; }
+
+  void item(int i, char *buf, size_t tam) override {
+    if (!i) return (void)snprintf(buf, tam, "%s", gen->accion);
+    const Param &p = gen->params[i - 1];
+    switch (p.tipo) {
+      case P_NUMERO: snprintf(buf, tam, "%s: %ld", p.nombre, (long)*p.valor); break;
+      case P_CASILLA: snprintf(buf, tam, "[%c] %s", *p.valor ? 'x' : ' ', p.nombre); break;
+      case P_LISTA: snprintf(buf, tam, "%s: %s", p.nombre, p.opcion(*p.valor)); break;
+    }
+  }
+
+  void elegir(int i) override {
+    if (!i) return resultado.abrir(gen);
+    const Param &p = gen->params[i - 1];
+    int32_t *v = p.valor;
+    switch (p.tipo) {
+      case P_NUMERO:
+        return editarNumero.abrir(p.nombre, *v, p.min, p.max, [v](int32_t n) {
+          *v = n;
+          guardarAzar();
+        });
+      case P_CASILLA:
+        // Las casillas de conjuntos: siempre al menos uno marcado
+        if (*v && gen->params == PARAMS_CONTRASENA && i - 1 < 5 && i - 1 >= 1 && conjuntos() == 1)
+          return fallo("Al menos un conjunto");
+        *v = !*v;
+        break;
+      case P_LISTA: *v = (*v + 1) % p.max; break;
+    }
+    guardarAzar();
+  }
+
+ public:
+  void abrir(const Generador *g) {
+    gen = g;
+    uiPush(this);
+  }
+};
+static MenuParametros menuParametros;
+
+class MenuAzar : public Lista {
+ protected:
+  void titulo(char *buf, size_t tam) override { snprintf(buf, tam, "Azar"); }
+  int numItems() override { return NUM(GENERADORES) + 2; }
+
+  void item(int i, char *buf, size_t tam) override {
+    if (i < NUM(GENERADORES)) snprintf(buf, tam, "%s", GENERADORES[i].nombre);
+    else if (i == NUM(GENERADORES)) snprintf(buf, tam, "Prueba del azar");
+    else snprintf(buf, tam, "Sonido ruleta: %s", az.sonido ? "sí" : "no");
+  }
+
+  void elegir(int i) override {
+    if (i < NUM(GENERADORES)) {
+      const Generador &g = GENERADORES[i];
+      if (g.params) menuParametros.abrir(&g);
+      else resultado.abrir(&g);
+    } else if (i == NUM(GENERADORES)) {
+      uiPush(&pantallaPrueba);
+    } else {
+      az.sonido = !az.sonido;
+      guardarAzar();
+    }
+  }
+};
+static MenuAzar menuAzar;
+
 // ---- Menú principal: categorías ----
 
 class MenuPrincipal : public Lista {
  protected:
   void titulo(char *buf, size_t tam) override { snprintf(buf, tam, "Ardutype"); }
-  int numItems() override { return almacenNumCategorias() + 5; }
+  int numItems() override { return almacenNumCategorias() + 6; }
 
   void item(int i, char *buf, size_t tam) override {
     int n = almacenNumCategorias();
@@ -1209,7 +1893,8 @@ class MenuPrincipal : public Lista {
     else if (i == n + 1) snprintf(buf, tam, "Pomodoro");
     else if (i == n + 2 && mantenerActivo()) textoMantener(buf, tam);
     else if (i == n + 2) snprintf(buf, tam, "Mantener sesión");
-    else if (i == n + 3) snprintf(buf, tam, "Ajustes");
+    else if (i == n + 3) snprintf(buf, tam, "Azar");
+    else if (i == n + 4) snprintf(buf, tam, "Ajustes");
     else snprintf(buf, tam, "Bloquear");
   }
 
@@ -1223,8 +1908,9 @@ void MenuPrincipal::elegir(int i) {
   if (i < n) return servicios.abrir(i);
   if (i == n + 1) return uiPush(&pantallaPomodoro);
   if (i == n + 2) return uiPush(&menuMantener);
-  if (i == n + 3) return uiPush(&ajustes);
-  if (i == n + 4) return bloquear();
+  if (i == n + 3) return uiPush(&menuAzar);
+  if (i == n + 4) return uiPush(&ajustes);
+  if (i == n + 5) return bloquear();
   rueda.abrir("Nueva categoría", "", LARGO_NOMBRE, false, [](const char *t) {
     int c = almacenNuevaCategoria(t);
     uiVolverA(&menu);
@@ -1420,9 +2106,10 @@ class PantallaBloqueo : public Pantalla {
 
  public:
   void tecla(Tecla t) override {
-    // Ni el pomodoro ni «mantener sesión» necesitan la bóveda
+    // Ni el pomodoro, ni «mantener sesión», ni el azar necesitan la bóveda
     if (t == ARRIBA) return uiPush(&pantallaPomodoro);
     if (t == ABAJO) return uiPush(&menuMantener);
+    if (t == IZQUIERDA) return uiPush(&menuAzar);
     if (segundosEspera()) return;
     if (t == CENTRO || t == DERECHA) pedirPin();
     else if (t == CENTRO_LARGO) pedirRecuperacion();
@@ -2025,6 +2712,8 @@ static void sincronizarNoti() {
 void uiIniciar() {
   prepararGrupos();
   aplicarAjustes();
+  cargarAzar();
+  validarAzar();
   ultimaTeclaMs = millis();
   uiRaiz(&arranque);
 }
@@ -2057,6 +2746,7 @@ void uiTick() {
     sucio = true;
   }
   sincronizarNoti();
+  if (!enPila(&resultado)) resultado.soltar();  // p. ej. tras el bloqueo automático
   cima()->tick();
 
   if (avisoActivo && (int32_t)(ahora - avisoHastaMs) >= 0) {

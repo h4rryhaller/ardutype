@@ -12,6 +12,8 @@
 // 1 px cada 30 s para que el PC no bloquee la sesión.
 // Notificaciones (notificacion.h): avisos y preguntas de aceptar o denegar
 // desde el PC (herramienta/notificar.py), con pitido y LED violeta.
+// Azar (azar.h): moneda, dados, contraseñas, Diceware, PIN, números, color,
+// alias, MAC, formatos fijos y una prueba del azar; con el TRNG del ATECC.
 // FASE 8: ATECC608B en el bus del OLED (atecc.h): el chip limita los intentos
 // del PIN. Se provisiona solo, de forma IRREVERSIBLE, la primera vez que se
 // abre o se crea la bóveda con él puesto.
